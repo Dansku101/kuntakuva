@@ -1,14 +1,20 @@
 # Kuntakuva
 
-Kuntakuva is a web application for exploring Finnish municipalities. A user
-searches for a municipality and receives a clear overview of its population,
-demographics, and development over time.
+Kuntakuva is a web application for exploring Finnish municipalities. Users
+will be able to search for a municipality and view a clear overview of its
+population, demographics, and development over time.
+
+## Project status
+
+The initial Next.js foundation is complete and verified. Municipality search,
+Statistics Finland API integration, and data visualizations are not yet
+implemented.
 
 ## MVP
 
 The first version will:
 
-- let the user search for a Finnish municipality
+- let users search for a Finnish municipality
 - retrieve public data from Statistics Finland
 - show key demographic statistics
 - visualize selected changes over time
@@ -17,13 +23,45 @@ The first version will:
 Municipality news and additional public data sources may be added after the
 core statistics experience works reliably.
 
-## Planned technology
+## Technology
 
-- Next.js and TypeScript for the web application
-- Statistics Finland APIs as the primary data source
-- Git and GitHub for version control and collaboration
-- Vercel for building and hosting the application
+- Next.js
+- React
+- TypeScript
+- Tailwind CSS
+- Statistics Finland public APIs
+- GitHub
+- Vercel
 
-## Status
+## Local development
 
-The project is at the initial setup stage.
+Install the project dependencies:
+
+```powershell
+npm.cmd install
+```
+
+Start the development server:
+
+```powershell
+npm.cmd run dev
+```
+
+Then open [http://localhost:3000](http://localhost:3000).
+
+Check the code with ESLint:
+
+```powershell
+npm.cmd run lint
+```
+
+Create a production build:
+
+```powershell
+npm.cmd run build
+```
+
+## Documentation
+
+The initial product scope and technical direction are recorded in
+[`docs/project-brief.md`](docs/project-brief.md).
