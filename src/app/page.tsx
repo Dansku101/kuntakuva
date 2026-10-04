@@ -1,7 +1,24 @@
-import { getMunicipalityPopulation } from "@/lib/statfin";
+import {
+  getMunicipalities,
+  getMunicipalityPopulation,
+} from "@/lib/statfin";
+import MunicipalityPicker from "./municipality-picker";
 
-export default async function Home() {
-  const municipality = await getMunicipalityPopulation("KU091", "2025");
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ kunta?: string | string[] }>;
+}) {
+  const municipalities = await getMunicipalities();
+  const { kunta } = await searchParams;
+
+  const selectedCode =
+    typeof kunta === "string" &&
+    municipalities.some((municipality) => municipality.code === kunta)
+      ? kunta
+      : "KU091";
+
+  const municipality = await getMunicipalityPopulation(selectedCode, "2025");
   const formattedPopulation = new Intl.NumberFormat("fi-FI").format(
     municipality.population,
   );
@@ -15,6 +32,10 @@ export default async function Home() {
       </header>
 
       <section className="mx-auto max-w-5xl px-6 py-16">
+        <MunicipalityPicker
+          municipalities={municipalities}
+          selectedCode={selectedCode}
+        />
         <p className="text-sm font-medium text-slate-500">Kunta</p>
         <h1 className="mt-2 text-4xl font-semibold">
           {municipality.municipalityName}
