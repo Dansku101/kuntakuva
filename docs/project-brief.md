@@ -26,4 +26,6 @@ core statistics experience works reliably.
 
 ## Status
 
-The project is at the initial setup stage.
+The population dashboard is implemented: municipality search, year selection,
+population trends, annual changes, CSV export, and responsive loading/error states.
+Age structure and further demographic indicators remain planned.
