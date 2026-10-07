@@ -10,6 +10,20 @@ const YEAR_VARIABLE_CODE = "timeperiod_y";
 export type Municipality = { code: string; name: string };
 export type MunicipalityCatalog = { municipalities: Municipality[]; years: string[] };
 export type PopulationPoint = { year: string; population: number | null };
+export const demographicIndicators = {
+  children: "vaesto_alle15_p",
+  workingAge: "vaesto_15_64_p",
+  seniors: "vaesto_yli64_p",
+  averageAge: "vaesto_keski_ika",
+  finnish: "vaesto_kieli_fi_p",
+  swedish: "vaesto_kieli_sv_p",
+  otherLanguages: "vaesto_kieli_ulk_p",
+  density: "vaerak-vaesto_maa_pa",
+} as const;
+export type DemographicProfile = {
+  year: string;
+  values: Record<keyof typeof demographicIndicators, number | null>;
+};
 export type PopulationSeries = {
   municipalityCode: string;
   municipalityName: string;
@@ -80,6 +94,47 @@ export async function getMunicipalityCatalog(): Promise<MunicipalityCatalog> {
 
 export async function getMunicipalities(): Promise<Municipality[]> {
   return (await getMunicipalityCatalog()).municipalities;
+}
+
+export async function getDemographicProfile(municipalityCode: string, year: string): Promise<DemographicProfile> {
+  const response = await fetch(STATFIN_POPULATION_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: [
+        { code: AREA_VARIABLE_CODE, selection: { filter: "item", values: [municipalityCode] } },
+        { code: CONTENTS_VARIABLE_CODE, selection: { filter: "item", values: Object.values(demographicIndicators) } },
+        { code: YEAR_VARIABLE_CODE, selection: { filter: "item", values: [year] } },
+      ],
+      response: { format: "json-stat2" },
+    }),
+    cache: "force-cache",
+    next: { revalidate: 60 * 60 * 24 },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error(`Demographic request failed: ${response.status}.`);
+  const data = await response.json() as JsonStatResponse;
+  const metricPosition = data.id?.indexOf(CONTENTS_VARIABLE_CODE) ?? -1;
+  const metricIndex = data.dimension?.[CONTENTS_VARIABLE_CODE]?.category.index;
+  const area = data.dimension?.[AREA_VARIABLE_CODE]?.category.label;
+  const returnedYears = data.dimension?.[YEAR_VARIABLE_CODE]?.category.label;
+  if (!metricIndex || metricPosition < 0 || !area?.[municipalityCode] || !returnedYears?.[year] ||
+      !Array.isArray(data.value) || !Array.isArray(data.size) || data.id.length !== data.size.length ||
+      data.size.some((size, index) => index !== metricPosition && size !== 1) ||
+      data.size[metricPosition] !== Object.keys(demographicIndicators).length) {
+    throw new Error("Unexpected demographic dimensions.");
+  }
+  const values = Object.fromEntries(Object.entries(demographicIndicators).map(([key, code]) => {
+    const index = Array.isArray(metricIndex) ? metricIndex.indexOf(code) : metricIndex[code];
+    const value = data.value[index];
+    if (!Number.isInteger(index) || index < 0 ||
+        (value !== null && (typeof value !== "number" || !Number.isFinite(value) || value < 0 ||
+          (key !== "density" && value > 100)))) {
+      throw new Error(`Invalid demographic value for ${code}.`);
+    }
+    return [key, value];
+  })) as DemographicProfile["values"];
+  return { year, values };
 }
 
 export async function getPopulationSeries(municipalityCode: string, years: string[]): Promise<PopulationSeries> {

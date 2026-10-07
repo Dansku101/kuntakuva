@@ -1,9 +1,12 @@
-import { ArrowDownRight, ArrowUpRight, CalendarDays, ExternalLink, MapPin, Minus, Users } from "lucide-react";
+import { ArrowUpRight, CalendarDays, ExternalLink, MapPin } from "lucide-react";
 import Link from "next/link";
 import { getMunicipalityCatalog, getPopulationSeries } from "@/lib/statfin";
-import { percentFormat, populationChange, populationFormat, signedPopulationFormat } from "@/lib/population";
 import MunicipalityPicker from "./municipality-picker";
 import PopulationChart from "./population-chart";
+import MunicipalityOverview from "./municipality-overview";
+import MunicipalityFinance from "./municipality-finance";
+import MunicipalityTrends from "./municipality-trends";
+import { Suspense } from "react";
 
 export default async function Home({ searchParams }: {
   searchParams: Promise<{ kunta?: string | string[]; vuosi?: string | string[] }>;
@@ -17,12 +20,6 @@ export default async function Home({ searchParams }: {
   const requestedYears = years.filter((year) => Number(year) <= Number(selectedYear)).slice(-21);
   const series = await getPopulationSeries(selectedCode, requestedYears);
   const current = series.points[series.points.length - 1];
-  const previous = series.points.find((point) => Number(point.year) === Number(selectedYear) - 1);
-  const annualChange = populationChange(current, previous);
-  const first = series.points.slice(-10)[0];
-  const periodChange = first.year === current.year ? null : populationChange(current, first);
-  const AnnualIcon = !annualChange || annualChange.absolute === 0 ? Minus : annualChange.absolute > 0 ? ArrowUpRight : ArrowDownRight;
-  const PeriodIcon = !periodChange || periodChange.absolute === 0 ? Minus : periodChange.absolute > 0 ? ArrowUpRight : ArrowDownRight;
   const updated = series.updatedAt ? new Date(series.updatedAt) : null;
   const updatedLabel = updated && !Number.isNaN(updated.getTime())
     ? new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki" }).format(updated) : "Ei ilmoitettu";
@@ -45,33 +42,14 @@ export default async function Home({ searchParams }: {
           <div>
             <p className="breadcrumb"><MapPin size={14} aria-hidden="true" />Suomi<span>/</span>Kuntatilastot</p>
             <h1>{series.municipalityName}</h1>
-            <p className="page-subtitle">Väestö ja kehitys</p>
+            <p className="page-subtitle">Kunnan yleiskuva</p>
           </div>
           <span className="year-badge"><CalendarDays size={16} aria-hidden="true" />31.12.{selectedYear}</span>
         </div>
 
-        <section className="metrics" aria-label="Väestön tunnusluvut">
-          <div className="metric">
-            <div className="metric-label"><Users size={17} aria-hidden="true" /><h2>Väkiluku</h2></div>
-            <p className="metric-value">{current.population === null ? "Ei tietoa" : populationFormat.format(current.population)}</p>
-            <p className="metric-detail">Asukasta vuoden {selectedYear} lopussa</p>
-          </div>
-          <div className="metric">
-            <div className="metric-label"><AnnualIcon size={18} aria-hidden="true" /><h2>Vuosimuutos</h2></div>
-            <p className={`metric-value ${!annualChange || annualChange.absolute === 0 ? "" : annualChange.absolute < 0 ? "negative" : "positive"}`}>
-              {annualChange ? signedPopulationFormat.format(annualChange.absolute) : "Ei tietoa"}
-            </p>
-            <p className="metric-detail">{annualChange?.percent !== null && annualChange?.percent !== undefined
-              ? `${percentFormat.format(annualChange.percent)} % edellisestä vuodesta` : "Vertailutietoa ei saatavilla"}</p>
-          </div>
-          <div className="metric">
-            <div className="metric-label"><PeriodIcon size={18} aria-hidden="true" /><h2>{first.year === selectedYear ? "Ajanjakson muutos" : `Muutos ${first.year}–${selectedYear}`}</h2></div>
-            <p className={`metric-value ${!periodChange || periodChange.absolute === 0 ? "" : periodChange.absolute < 0 ? "negative" : "positive"}`}>
-              {periodChange?.percent !== null && periodChange?.percent !== undefined ? `${percentFormat.format(periodChange.percent)} %` : "Ei tietoa"}
-            </p>
-            <p className="metric-detail">{periodChange ? `${signedPopulationFormat.format(periodChange.absolute)} asukasta ajanjaksolla` : "Vertailutietoa ei saatavilla"}</p>
-          </div>
-        </section>
+        <Suspense fallback={<section className="trend-profile" aria-busy="true"><h2>Kunnan suunta</h2><div className="metrics">{[1, 2, 3].map((id) => <div key={id} className="metric"><div className="skeleton skeleton-label" /><div className="skeleton skeleton-value" /></div>)}</div></section>}>
+          <MunicipalityTrends series={series} year={selectedYear} />
+        </Suspense>
 
         <div className="dashboard-grid">
           <PopulationChart key={`${selectedCode}-${selectedYear}`} series={series} />
@@ -92,16 +70,27 @@ export default async function Home({ searchParams }: {
           </aside>
         </div>
 
+        <Suspense fallback={<section className="overview-section" aria-busy="true"><h2>Väestörakenne</h2><p className="overview-note">Haetaan tietoja…</p></section>}>
+          <MunicipalityOverview code={selectedCode} name={series.municipalityName} year={selectedYear} />
+        </Suspense>
+
+        <Suspense fallback={<section className="overview-section" aria-busy="true"><h2>Toteutunut talous</h2><p className="overview-note">Haetaan tilinpäätöstä…</p></section>}>
+          <MunicipalityFinance code={selectedCode} name={series.municipalityName} year={selectedYear} population={current.population} />
+        </Suspense>
+
         <nav className="municipality-links" aria-label="Siirry kuntaan">
           <h2>Muita kuntia</h2>
           <div>{popular.map((item) => <Link key={item.code} prefetch={false}
-            href={`/?${new URLSearchParams({ kunta: item.code, vuosi: selectedYear })}`}
+            href={`/?${new URLSearchParams({
+              kunta: item.code,
+              vuosi: selectedYear,
+            })}`}
             aria-current={item.code === selectedCode ? "page" : undefined}>
             {item.name}<ArrowUpRight size={15} aria-hidden="true" />
           </Link>)}</div>
         </nav>
       </div>
-      <footer className="app-footer"><div className="shell"><span>Kuntakuva</span><span>Avoin tilastotieto · Tilastokeskus</span></div></footer>
+      <footer className="app-footer"><div className="shell"><span>Kuntakuva</span><span>Avoin tieto · Tilastokeskus ja Valtiokonttori</span></div></footer>
     </main>
   );
 }
