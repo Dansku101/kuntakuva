@@ -47,7 +47,7 @@ export default function TrendSeries({ title, points, note, source, sourceUrl, co
     </div>
     <div className="history-readout"><strong>{latest?.value != null ? `${format.format(latest.value)} %` : "Ei tietoa"}</strong><span>{latest?.year ?? "Ei saatavilla olevia vuosia"}</span></div>
     {!values.length ? <p className="empty-chart">Valitulle ajanjaksolle ei ole saatavilla varmennettuja tietoja.</p>
-      : view === "table" ? <div className="table-wrap"><table>
+      : view === "table" ? <div className="table-wrap" tabIndex={0} role="region" aria-label={`${title}: taulukko`}><table>
         <caption className="sr-only">{title}, vuosittaiset arvot</caption>
         <thead><tr><th scope="col">Vuosi</th><th scope="col">%</th></tr></thead>
         <tbody>{[...points].reverse().map((point) => <tr key={point.year}><th scope="row">{point.year}</th><td>{point.value === null ? "Ei tietoa" : format.format(point.value)}</td></tr>)}</tbody>

@@ -58,6 +58,20 @@ type JsonStatResponse = {
   value: Array<number | null>;
 };
 
+function validateDimensions(data: JsonStatResponse, selections: Record<string, string[]>) {
+  if (!data || !Array.isArray(data.id) || !Array.isArray(data.size) || !Array.isArray(data.value) ||
+      data.id.length !== 3 || new Set(data.id).size !== 3 || data.size.length !== 3 ||
+      data.size.reduce((a, b) => a * b, 1) !== data.value.length ||
+      data.id.some((id, i) => {
+        const requested = selections[id];
+        const category = data.dimension?.[id]?.category;
+        if (!requested || !category?.index || data.size[i] !== requested.length ||
+            Object.keys(category.index).length !== requested.length) return true;
+        const indexes = requested.map((key) => Array.isArray(category.index) ? category.index.indexOf(key) : category.index[key]);
+        return new Set(indexes).size !== requested.length || indexes.some((index) => !Number.isInteger(index) || index < 0 || index >= data.size[i]);
+      })) throw new Error("Statistics Finland returned unexpected population dimensions or an unexpected value index.");
+}
+
 function getVariable(data: PxWebMetadataResponse, code: string) {
   const variable = Array.isArray(data.variables)
     ? data.variables.find((item) => item.code === code)
@@ -114,6 +128,8 @@ export async function getDemographicProfile(municipalityCode: string, year: stri
   });
   if (!response.ok) throw new Error(`Demographic request failed: ${response.status}.`);
   const data = await response.json() as JsonStatResponse;
+  validateDimensions(data, { [AREA_VARIABLE_CODE]: [municipalityCode], [YEAR_VARIABLE_CODE]: [year],
+    [CONTENTS_VARIABLE_CODE]: Object.values(demographicIndicators) });
   const metricPosition = data.id?.indexOf(CONTENTS_VARIABLE_CODE) ?? -1;
   const metricIndex = data.dimension?.[CONTENTS_VARIABLE_CODE]?.category.index;
   const area = data.dimension?.[AREA_VARIABLE_CODE]?.category.label;
@@ -156,6 +172,8 @@ export async function getPopulationSeries(municipalityCode: string, years: strin
   });
   if (!response.ok) throw new Error(`Statistics Finland population request failed: ${response.status}.`);
   const data = (await response.json()) as JsonStatResponse;
+  validateDimensions(data, { [AREA_VARIABLE_CODE]: [municipalityCode], [YEAR_VARIABLE_CODE]: years,
+    [CONTENTS_VARIABLE_CODE]: [POPULATION_VALUE_CODE] });
   const area = data.dimension?.[AREA_VARIABLE_CODE];
   const time = data.dimension?.[YEAR_VARIABLE_CODE];
   const municipalityName = area?.category.label[municipalityCode];
@@ -174,7 +192,7 @@ export async function getPopulationSeries(municipalityCode: string, years: strin
       : time.category.index[year];
     const population = data.value[index];
     if (!Number.isInteger(index) || index < 0 ||
-        (population !== null && (typeof population !== "number" || !Number.isFinite(population) || population < 0))) {
+        (population !== null && (typeof population !== "number" || !Number.isSafeInteger(population) || population < 0))) {
       throw new Error(`Statistics Finland returned an unexpected value for ${year}.`);
     }
     return { year, population };

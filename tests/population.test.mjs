@@ -19,6 +19,15 @@ function loadTs(relativePath) {
   const loaded = new Module(filename);
   loaded.filename = filename;
   loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+  const nativeRequire = loaded.require.bind(loaded);
+  loaded.require = (specifier) => {
+    const local = specifier.startsWith("@/") ? path.resolve(testDirectory, "../src", specifier.slice(2))
+      : specifier.startsWith(".") ? path.resolve(path.dirname(filename), specifier) : null;
+    if (local) for (const ext of [".ts", ".tsx"]) {
+      if (fs.existsSync(local + ext)) return loadTs(path.relative(path.resolve(testDirectory, ".."), local + ext));
+    }
+    return nativeRequire(specifier);
+  };
   loaded._compile(compiled, filename);
   return loaded.exports;
 }
@@ -45,8 +54,8 @@ test("trend chart server rendering preserves SVG tooltip text without React erro
 
 test("map labels prefer Finnish node positions and exclude area centres and localities", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => Response.json(String(url).includes("nominatim") ? {
-    features: [{ type: "Feature", bbox: [24, 60, 25, 61], properties: { category: "boundary" },
+  globalThis.fetch = async (url) => Response.json(String(url).includes("tilastointialueet") ? {
+    features: [{ type: "Feature", bbox: [24, 60, 25, 61], properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
       geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] } }],
   } : { elements: [
     { id: 1, type: "node", lat: 60.2, lon: 24.7, tags: { place: "town", name: "Grankulla", "name:fi": "Kauniainen" } },
@@ -84,8 +93,8 @@ test("map keeps its boundary during outages, fails over and reuses successful pl
   let requests = [];
   let available = false;
   globalThis.fetch = async (url) => {
-    if (String(url).includes("nominatim")) return Response.json({ features: [{
-      type: "Feature", bbox: [24, 60, 25, 61], properties: { category: "boundary" },
+    if (String(url).includes("tilastointialueet")) return Response.json({ features: [{
+      type: "Feature", bbox: [24, 60, 25, 61], properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
       geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] },
     }] });
     requests.push(String(url));
@@ -128,6 +137,7 @@ function dataset(overrides = {}) {
     source: "Tilastokeskus",
     updated: "2026-05-29T05:00:00Z",
     dimension: {
+      contentscode: { category: { index: { "vaerak-vaesto": 0 }, label: { "vaerak-vaesto": "Väestö 31.12." } } },
       [areaCode]: { category: { index: { KU091: 0 }, label: { KU091: "Helsinki" } } },
       [yearCode]: { category: { index: { "2024": 0, "2025": 1 }, label: { "2024": "2024", "2025": "2025" } } },
     },
@@ -388,6 +398,7 @@ test("demographic values follow returned metric indexes, preserving missing valu
     value: [3000, 20, 5, 75, 40, 20, 65, null],
   });
   data.dimension.contentscode = { category: { index: codes, label: Object.fromEntries(codes.map((code) => [code, code])) } };
+  data.dimension[yearCode].category = { index: ["2025"], label: { "2025": "2025" } };
   mockResponse(t, data);
   const result = await getDemographicProfile("KU091", "2025");
   assert.deepEqual(result.values, { children: null, workingAge: 65, seniors: 20, averageAge: 40,
@@ -428,4 +439,102 @@ test("relative growth preserves gaps and rejects missing or zero baselines", () 
 test("CSV preserves Finnish text, escapes quotes, and leaves missing values blank", () => {
   assert.equal(populationCsv('Testi "kunta"', [{ year: "2024", population: null }, { year: "2025", population: 110 }]),
     '\uFEFFKunta;Vuosi;Väkiluku\r\n"Testi ""kunta""";2024;\r\n"Testi ""kunta""";2025;110');
+});
+
+test("population rejects wrong metric, duplicate indexes, fractional people and malformed dimensions", async (t) => {
+  let current = dataset();
+  t.mock.method(globalThis, "fetch", async () => Response.json(current));
+  const invalid = [
+    (d) => { d.dimension.contentscode.category.index = { "vaerak-kokmuutos": 0 }; },
+    (d) => { d.dimension[yearCode].category.index = { "2024": 0, "2025": 0 }; },
+    (d) => { d.dimension[areaCode].category.index = { KU049: 0 }; },
+    (d) => { d.id = [areaCode, yearCode, yearCode]; },
+    (d) => { d.value = [100]; },
+    (d) => { d.value[0] = 100.5; },
+  ];
+  for (const mutate of invalid) {
+    current = dataset(); mutate(current);
+    await assert.rejects(getPopulationSeries("KU091", ["2024", "2025"]));
+  }
+});
+
+test("map uses verified code and year, rejects wrong or ambiguous geography before requesting places", async (t) => {
+  const { GET } = loadTs("src/app/api/municipality-map/route.ts");
+  const feature = { type: "Feature", properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
+    geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] } };
+  let payload = { features: [feature] };
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url) => { calls.push(String(url)); return Response.json(payload); });
+  const request = { nextUrl: new URL("http://localhost/api/municipality-map?code=KU235&name=Helsinki&details=0") };
+  const valid = await GET(request);
+  const result = await valid.json();
+  assert.equal(result.name, "Kauniainen", "Untrusted name cannot override the verified municipality");
+  assert.deepEqual(result.bbox, [24, 60, 25, 61]);
+  assert.equal(new URL(calls[0]).searchParams.get("CQL_FILTER"), "kunta='235'");
+  for (const features of [[], [feature, feature], [{ ...feature, properties: { ...feature.properties, kunta: "091" } }],
+    [{ ...feature, properties: { ...feature.properties, vuosi: 2025 } }]]) {
+    payload = { features };
+    const response = await GET(request);
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+  }
+  assert.ok(calls.every((url) => url.includes("tilastointialueet")));
+});
+
+test("Overpass HTTP-200 timeouts are never fetch-cached; concurrent requests share a successful result", async (t) => {
+  const { GET } = loadTs("src/app/api/municipality-map/route.ts");
+  let overpassCalls = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (String(url).includes("tilastointialueet")) return Response.json({ features: [{
+      type: "Feature", properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
+      geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] },
+    }] });
+    overpassCalls++;
+    assert.equal(options.cache, "no-store");
+    await gate;
+    return Response.json(String(url).includes("private.coffee") ? { elements: [], remark: "runtime error: timeout" }
+      : { elements: [{ type: "node", id: 1, lat: 60.5, lon: 24.5,
+        tags: { name: "Library", amenity: "library", website: "javascript:alert(1)" } }] });
+  });
+  const request = { nextUrl: new URL("http://localhost/api/municipality-map?code=KU235") };
+  const pending = Promise.all([GET(request), GET(request)]);
+  release();
+  const responses = await pending;
+  assert.equal(overpassCalls, 2, "One shared primary and one shared fallback request");
+  for (const response of responses) {
+    const data = await response.json();
+    assert.equal(data.detailsStatus, "ready");
+    assert.equal(data.places[0].website, null);
+  }
+});
+
+test("grid selection never borrows a future observation", () => {
+  const { gridYearFor } = loadTs("src/lib/map-data.ts");
+  assert.equal(gridYearFor("1990"), null);
+  assert.equal(gridYearFor("2004"), null);
+  assert.equal(gridYearFor("2005"), 2005);
+  assert.equal(gridYearFor("2009"), 2005);
+  assert.equal(gridYearFor("2010"), 2010);
+  assert.equal(gridYearFor("2025"), 2025);
+  assert.equal(gridYearFor("invalid"), null);
+});
+
+test("OSM links allow HTTP(S) only, without embedded credentials", () => {
+  const { safeWebsite } = loadTs("src/lib/map-data.ts");
+  for (const value of [null, "", "javascript:alert(1)", "data:text/html,test", "file:///c:/", "//example.com", "https://user:secret@example.com"]) {
+    assert.equal(safeWebsite(value), null);
+  }
+  assert.equal(safeWebsite("https://example.com/path?q=1"), "https://example.com/path?q=1");
+});
+
+test("population SVGs preserve gaps and render complete tooltip strings", () => {
+  const { default: PopulationChart } = loadTs("src/app/population-chart.tsx");
+  const html = renderToString(createElement(PopulationChart, { series: {
+    municipalityName: "Test", municipalityCode: "KU235", source: "Test", updatedAt: "", regionalNote: "",
+    points: [{ year: "2020", population: 100 }, { year: "2022", population: 120 }],
+  } }));
+  assert.equal((html.match(/<polyline /g) ?? []).length, 2);
+  assert.ok(html.includes("<title>Test, 2022: 120</title>"));
 });

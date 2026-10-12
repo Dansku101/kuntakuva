@@ -28,4 +28,9 @@ core statistics experience works reliably.
 
 The population dashboard is implemented: municipality search, year selection,
 population trends, annual changes, CSV export, and responsive loading/error states.
-Age structure and further demographic indicators remain planned.
+Age structure, language distribution, employment trends and verified 2024–2025
+municipal accounts are implemented. Overview, Trends, Map and Statistics are
+separate views sharing municipality and year selection. The map uses code-matched
+Statistics Finland boundaries and OSM place data. The next priorities are two-
+municipality comparison, age-structure trends and saved municipalities; see
+[the product and engineering audit](audit-2026-10-12.md).

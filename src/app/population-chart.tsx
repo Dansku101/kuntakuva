@@ -29,11 +29,12 @@ export default function PopulationChart({ series }: { series: PopulationSeries }
   function lineSegments(seriesPoints: typeof points) {
     const segments: string[][] = [];
     let segment: string[] = [];
-    for (const point of seriesPoints) {
-      if (point.population === null) {
+    for (const [index, point] of seriesPoints.entries()) {
+      if (point.population === null || (index > 0 && Number(point.year) - Number(seriesPoints[index - 1].year) !== 1)) {
         if (segment.length) segments.push(segment);
         segment = [];
-      } else {
+      }
+      if (point.population !== null) {
         segment.push(`${x(point.year)},${y(point.population)}`);
       }
     }
@@ -92,7 +93,7 @@ export default function PopulationChart({ series }: { series: PopulationSeries }
             <span>{series.municipalityName}</span>
           </div>
           {available.length ? (
-            <div className="chart-frame">
+            <div className="chart-frame" tabIndex={0} role="region" aria-label="Väestökaavio, vieritä tarvittaessa vaakasuunnassa">
               <svg viewBox="0 0 900 312" role="img" aria-label={`${names}: ${scale === "change" ? "väkiluvun muutos (%)" : "väkiluku"} vuosina ${minYear}–${maxYear}. Tarkat luvut taulukkonäkymässä.`}
                 onMouseLeave={() => setHoverYear(null)} onMouseMove={(event) => {
                   const rect = event.currentTarget.getBoundingClientRect();
@@ -122,7 +123,7 @@ export default function PopulationChart({ series }: { series: PopulationSeries }
           <p className="chart-footnote">{scale === "change" ? `Väkiluvun muutos vuodesta ${baselineYear ?? "-"} (%)` : "Asukasta vuoden lopussa"} · {minYear}–{maxYear} · Y-akseli rajattu havaintoihin</p>
         </>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0} role="region" aria-label="Väkiluvun taulukko">
           <table><caption className="sr-only">{names}, väkiluku ja vuosimuutos</caption>
             <thead><tr><th scope="col">Vuosi</th><th scope="col">Asukasta</th><th scope="col">Vuosimuutos</th></tr></thead>
             <tbody>{[...points].reverse().map((point) => {

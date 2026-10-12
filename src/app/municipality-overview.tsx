@@ -35,9 +35,9 @@ export default async function MunicipalityOverview({ code, name, year }: { code:
     <div className="overview-layout">
       <div>
         <h3>Ikäjakauma</h3>
-        <div className="age-distribution" aria-hidden="true">
-          {ages.map((age) => <span key={age.className} className={age.className} style={{ width: `${age.value ?? 0}%` }} />)}
-        </div>
+        {ages.every((age) => age.value !== null) && <div className="age-distribution" aria-hidden="true">
+          {ages.map((age) => <span key={age.className} className={age.className} style={{ width: `${age.value}%` }} />)}
+        </div>}
         <dl className="age-facts">{ages.map((age) => <div key={age.className}>
           <dt><span className={`age-swatch ${age.className}`} />{age.label}</dt><dd>{format(age.value, "%")}</dd>
         </div>)}</dl>
@@ -50,7 +50,7 @@ export default async function MunicipalityOverview({ code, name, year }: { code:
         <h3>Kielijakauma</h3>
         <dl className="language-facts">{languages.map((language) => <div key={language.label}>
           <dt>{language.label}</dt><dd>{format(language.value, "%")}</dd>
-          <div className="language-track" aria-hidden="true"><span style={{ width: `${language.value ?? 0}%` }} /></div>
+          {language.value !== null && <div className="language-track" aria-hidden="true"><span style={{ width: `${language.value}%` }} /></div>}
         </div>)}</dl>
       </div>
     </div>

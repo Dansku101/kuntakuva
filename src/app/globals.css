@@ -331,3 +331,28 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
   .regional-note { border-top: 1px solid var(--line); padding-top: 20px; }
   .app-footer > div { flex-direction: column; gap: 5px; }
 }
+
+/* Four destinations share one selection and keep detail out of the overview. */
+.view-content { padding-block: 28px; }
+.view-intro { max-width: 760px; margin-bottom: 26px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.view-content > .map-section, .view-content > .overview-section:first-of-type { border-top: 0; padding-top: 0; }
+.explore-links { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 30px; }
+.explore-links a { padding: 20px; border: 1px solid var(--line); border-radius: 6px; }
+.explore-links a:hover { background: #f5f7f5; border-color: #b8c7bf; }
+.explore-links strong { display: flex; align-items: center; justify-content: space-between; color: var(--accent); font-size: 14px; }
+.explore-links span { display: block; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.source-disclosure { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 28px; }
+.source-disclosure p { max-width: 850px; color: var(--muted); font-size: 12px; margin-block: 10px; }
+.view-tabs a { min-height: 44px; }
+.place-list { max-height: 300px; overflow-y: auto; padding: 4px; }
+.map-status { position: relative; inset: auto; padding: 10px 12px; background: #07141e; }
+.map-layer-error { padding: 10px 12px; color: #fff1c8; font-size: 12px; }
+.map-toolbar :focus-visible, .municipality-map :focus-visible { outline-color: #f5c76b; }
+.table-wrap:focus-visible, .chart-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 760px) {
+  .explore-links { grid-template-columns: minmax(0, 1fr); }
+  .segmented button, .icon-button.export-button { min-height: 44px; min-width: 44px; }
+  .view-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+  .view-tabs a { padding-inline: 6px; justify-content: center; font-size: 11px; }
+  .history-series .section-heading { flex-wrap: wrap; }
+}

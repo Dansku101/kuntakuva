@@ -5,6 +5,7 @@ import { Building2, Landmark, Layers, MapPinned, RefreshCw, UsersRound } from "l
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 import type * as Leaflet from "leaflet";
+import { gridYearFor, safeWebsite } from "@/lib/map-data";
 
 type Settlement = {
   id: string;
@@ -36,7 +37,6 @@ type MapResponse = {
 type LayerKey = "density" | "settlements" | "places";
 
 const formatter = new Intl.NumberFormat("fi-FI");
-const SUPPORTED_GRID_YEARS = [2005, ...Array.from({ length: 16 }, (_, index) => 2010 + index)];
 const placeLabels: Record<string, string> = {
   attraction: "Nähtävyys",
   gallery: "Galleria",
@@ -55,12 +55,6 @@ const settlementLabels: Record<string, string> = {
   neighbourhood: "Naapurusto",
   locality: "Paikannimi",
 };
-
-function gridYearFor(selectedYear: string) {
-  const numeric = Number(selectedYear);
-  const year = SUPPORTED_GRID_YEARS.filter((item) => item <= numeric).at(-1) ?? SUPPORTED_GRID_YEARS.at(-1);
-  return year ?? 2025;
-}
 
 function placeKindLabel(kind: string) {
   return placeLabels[kind] ?? "Kohde";
@@ -86,8 +80,9 @@ function popupForPlace(place: Place) {
     place.operator ? `Ylläpitäjä: ${place.operator}` : null,
     place.openingHours ? `Aukiolo: ${place.openingHours}` : null,
   ].filter(Boolean).map((item) => `<p>${escapeHtml(item ?? "")}</p>`).join("");
-  const website = place.website
-    ? `<a href="${escapeHtml(place.website)}" target="_blank" rel="noreferrer">Verkkosivut</a>`
+  const url = safeWebsite(place.website);
+  const website = url
+    ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Verkkosivut</a>`
     : "";
   return `<strong>${escapeHtml(place.name)}</strong><span>${escapeHtml(placeKindLabel(place.kind))}</span>${details}${website}`;
 }
@@ -179,6 +174,8 @@ export default function MunicipalityMap({ code, name, year }: { code: string; na
     places: true,
   });
   const [mapReady, setMapReady] = useState(false);
+  const enabledRef = useRef(enabled);
+  const [gridError, setGridError] = useState(false);
   const [mapResult, setMapResult] = useState<{ key: string; data: MapResponse | null; error: string | null } | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [retry, setRetry] = useState(0);
@@ -235,7 +232,8 @@ export default function MunicipalityMap({ code, name, year }: { code: string; na
         zoomControl: false,
         attributionControl: true,
       });
-      L.control.zoom({ position: "bottomright" }).addTo(map);
+      L.control.zoom({ position: "bottomright", zoomInTitle: "Lähennä", zoomOutTitle: "Loitonna" }).addTo(map);
+      map.attributionControl.addAttribution('Kuntaraja: <a href="https://geo.stat.fi/geoserver/tilastointialueet/wfs?service=WFS&request=GetCapabilities">Tilastokeskus</a>');
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors",
         maxZoom: 19,
@@ -285,29 +283,27 @@ export default function MunicipalityMap({ code, name, year }: { code: string; na
         fittedRequestRef.current = requestKey;
       }
 
-      const density = L.tileLayer.wms("https://geo.stat.fi/geoserver/vaestoruutu/wms", {
+      const density = gridYear === null ? undefined : L.tileLayer.wms("https://geo.stat.fi/geoserver/vaestoruutu/wms", {
         layers: densityLayerName,
         format: "image/png",
         transparent: true,
         opacity: 0.58,
         attribution: "Tilastokeskus",
       });
-      density.on("tileerror", () => setMapResult((current) => current?.key === requestKey
-        ? { ...current, error: "Väestöruutukerrosta ei saatu ladattua valitulle vuodelle." }
-        : current));
+      density?.on("tileerror", () => setGridError(true));
       const settlements = createSettlementLayer(L, data.settlements, map);
       const places = createPlaceLayer(L, data.places);
       layerRef.current = { boundary, density, settlements, places };
 
-      if (enabled.density) density.addTo(map);
-      if (enabled.settlements) settlements.addTo(map);
-      if (enabled.places) places.addTo(map);
+      if (enabledRef.current.density) density?.addTo(map);
+      if (enabledRef.current.settlements) settlements.addTo(map);
+      if (enabledRef.current.places) places.addTo(map);
     }
     void drawData();
     return () => {
       cancelled = true;
     };
-  }, [data, densityLayerName, enabled.density, enabled.places, enabled.settlements, mapReady, requestKey]);
+  }, [data, densityLayerName, gridYear, mapReady, requestKey]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -321,7 +317,10 @@ export default function MunicipalityMap({ code, name, year }: { code: string; na
   }, [enabled]);
 
   function toggleLayer(key: LayerKey) {
-    setEnabled((current) => ({ ...current, [key]: !current[key] }));
+    const next = { ...enabledRef.current, [key]: !enabledRef.current[key] };
+    enabledRef.current = next;
+    setEnabled(next);
+    if (key === "density") { setGridError(false); layerRef.current.density?.redraw(); }
   }
 
   return (
@@ -336,7 +335,7 @@ export default function MunicipalityMap({ code, name, year }: { code: string; na
       <div className="map-layout">
         <div className="map-panel">
           <div className="map-toolbar" aria-label="Karttatasot">
-            <button type="button" onClick={() => toggleLayer("density")} aria-pressed={enabled.density}>
+            <button type="button" disabled={gridYear === null} onClick={() => toggleLayer("density")} aria-pressed={enabled.density && gridYear !== null}>
               <Layers size={16} aria-hidden="true" />Väestöruudut
             </button>
             <button type="button" onClick={() => toggleLayer("settlements")} aria-pressed={enabled.settlements}>
@@ -345,49 +344,56 @@ export default function MunicipalityMap({ code, name, year }: { code: string; na
             <button type="button" onClick={() => toggleLayer("places")} aria-pressed={enabled.places}>
               <Landmark size={16} aria-hidden="true" />Kohteet
             </button>
+            <button type="button" disabled={!data || !mapReady} onClick={() => {
+              const bounds = layerRef.current.boundary?.getBounds();
+              if (bounds?.isValid()) mapRef.current?.fitBounds(bounds.pad(0.08), { maxZoom: 14 });
+            }}>Näytä koko kunta</button>
             {(mapResult?.error || data?.detailsStatus === "unavailable") && <button type="button"
               title="Yritä uudelleen" aria-label="Yritä uudelleen" onClick={() => {
                 setMapResult(null);
                 setRetry((current) => current + 1);
               }}><RefreshCw size={16} aria-hidden="true" /></button>}
           </div>
-          <div ref={mapNodeRef} className="municipality-map" role="application"
+          <div ref={mapNodeRef} className="municipality-map" role="region"
             aria-label={`${name}: interaktiivinen kartta`} />
           <p className="map-status" role="status">{status}</p>
+          {enabled.density && gridError && <p className="map-layer-error" role="status">Väestöruutuja ei saatu ladattua. Poista taso ja ota se uudelleen käyttöön.</p>}
         </div>
         <aside className="map-details" aria-label="Kartta-aineiston tiedot">
           <div className="map-legend">
             <h3>Selite</h3>
-            <p><span className="legend-line" />Kuntaraja OpenStreetMapista</p>
+            <p><span className="legend-line" />Tilastokeskus · kuntajako 2026</p>
             <p><span className="legend-dot legend-library" />Kirjastot</p>
             <p><span className="legend-dot legend-place" />Museot, nähtävyydet ja muut kohteet</p>
-            <p><span className="legend-grid" />Väestöruudut 1 km x 1 km, vuosi {gridYear}</p>
+            <p><span className="legend-grid" />{gridYear === null ? "Väestöruutuja ei ole saatavilla valitulle vuodelle." : `Väestöruudut 1 km × 1 km, vuosi ${gridYear}`}</p>
+            {gridYear !== null && String(gridYear) !== year && <p>Valittua vuotta edeltävä uusin julkaistu ruutuaineisto.</p>}
           </div>
           <div className="map-counts">
             <div><strong>{data?.detailsStatus === "ready" ? formatter.format(data.settlements.length) : data?.detailsStatus === "unavailable" ? "-" : "…"}</strong><span>paikannimeä</span></div>
             <div><strong>{data?.detailsStatus === "ready" ? formatter.format(data.places.length) : data?.detailsStatus === "unavailable" ? "-" : "…"}</strong><span>klikattavaa kohdetta</span></div>
           </div>
           <div className="place-list">
-            <h3>Kohteita</h3>
-            {data?.places.length ? data.places.slice(0, 8).map((place) => (
+            <h3>Kohteet · myös näppäimistöllä</h3>
+            {data?.places.length ? data.places.map((place) => (
               <button key={place.id} type="button" onClick={() => setSelectedPlace(place)}
                 aria-pressed={selectedPlace?.id === place.id}>
                 <Building2 size={15} aria-hidden="true" />
                 <span>{place.name}</span>
                 <small>{placeKindLabel(place.kind)}</small>
               </button>
-            )) : <p>{data?.detailsStatus === "unavailable" ? "Kohdetietojen palvelu ei juuri nyt vastaa." : data?.detailsStatus === "ready" ? "Kohteita ei löytynyt." : "Ladataan kohteita…"}</p>}
+            )) : <p>{mapResult?.error || data?.detailsStatus === "unavailable" ? "Kohdetietoja ei juuri nyt saada lähteestä." : data?.detailsStatus === "ready" ? "Kohteita ei löytynyt." : "Ladataan kohteita…"}</p>}
           </div>
           {selectedPlace && <div className="selected-place">
             <h3>{selectedPlace.name}</h3>
             <p>{placeKindLabel(selectedPlace.kind)}</p>
             {selectedPlace.address && <p>{selectedPlace.address}</p>}
             {selectedPlace.openingHours && <p>Aukiolo: {selectedPlace.openingHours}</p>}
-            {selectedPlace.website && <a className="text-link" href={selectedPlace.website} target="_blank" rel="noreferrer">Verkkosivut</a>}
+            {safeWebsite(selectedPlace.website) && <a className="text-link" href={safeWebsite(selectedPlace.website)!} target="_blank" rel="noreferrer">Verkkosivut</a>}
           </div>}
           <p className="map-note">
-            Väestökerros on Tilastokeskuksen julkaisema ruutuaineisto, ei arvio yksittäisistä kodeista.
-            OSM-kohteiden kattavuus vaihtelee kunnittain.
+            Väestökerros kuvaa ruutujen yhteenlaskettua väestöä, ei yksittäisiä koteja tai satelliitin yövaloja.
+            Ruudut voivat ulottua kuntarajan yli. Kuntaraja on yleistetty (1:1 000 000), ei kiinteistöraja tai valitun vuoden historiallinen raja.
+            OSM-nimet ja kohteet kuvaavat nykyistä kartoitusta; kattavuus vaihtelee. Näytetään enintään 200 nimeä ja 120 kohdetta, ei kunnan kaikkia palveluja.
           </p>
         </aside>
       </div>

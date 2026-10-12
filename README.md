@@ -6,6 +6,14 @@ over time using Statistics Finland's public data.
 
 ## Project status
 
+The dashboard has four separate URL-backed views: Overview (`yleiskuva`),
+Trends (`trendit`), Map (`kartta`) and Statistics (`tilastot`). Municipality and
+year selection preserve the active view. Overview holds the headline indicators;
+Trends holds time series; Statistics holds demographics and actual accounts.
+The map uses Statistics Finland's code-matched 2026 municipal boundaries and
+OSM places. See [the October 2026 audit](docs/audit-2026-10-12.md) for findings,
+source verification, testing, product decisions and remaining limitations.
+
 The population dashboard includes municipality search, available-year selection,
 population trends, a 5/10/20-observation chart, an accessible data table,
 and CSV export. The responsive interface includes loading and retry states.

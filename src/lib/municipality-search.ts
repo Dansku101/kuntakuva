@@ -21,6 +21,7 @@ function distance(a: string, b: string) {
 
 export function searchMunicipalities<T extends SearchableMunicipality>(items: T[], query: string): T[] {
   const needle = normalize(query);
+  if (needle.length > 80) return [];
   if (!needle) return items;
   return items.map((item) => {
     const name = normalize(item.name);

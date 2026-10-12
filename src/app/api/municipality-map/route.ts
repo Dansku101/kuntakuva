@@ -1,14 +1,13 @@
 import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon } from "geojson";
 import type { NextRequest } from "next/server";
+import { safeWebsite } from "../../../lib/map-data";
 
-type NominatimFeature = Feature<Geometry, {
-  display_name?: string;
-  name?: string;
-  osm_type?: string;
-  type?: string;
-  category?: string;
+type BoundaryFeature = Feature<Geometry, {
+  kunta: string;
+  nimi: string;
+  vuosi: number;
 }>;
-type NominatimResponse = FeatureCollection<Geometry, NominatimFeature["properties"]>;
+type BoundaryResponse = FeatureCollection<Geometry, BoundaryFeature["properties"]>;
 type OverpassElement = {
   id: number;
   type: "node" | "way" | "relation";
@@ -19,7 +18,7 @@ type OverpassElement = {
 };
 type OverpassResponse = { elements?: OverpassElement[]; remark?: string };
 
-const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const BOUNDARY_URL = "https://geo.stat.fi/geoserver/tilastointialueet/wfs";
 const OVERPASS_URLS = ["https://overpass.private.coffee/api/interpreter", "https://overpass-api.de/api/interpreter"];
 const overpassCache = new Map<string, { expires: number; pending: Promise<OverpassResponse> }>();
 const APP_USER_AGENT = "Kuntakuva/0.1 municipality explorer";
@@ -122,7 +121,7 @@ function simplifyPlaces(elements: OverpassElement[], boundary: Polygon | MultiPo
       lat: point.lat,
       lon: point.lon,
       address: displayAddress(tags),
-      website: tags.website || tags["contact:website"] || null,
+      website: safeWebsite(tags.website || tags["contact:website"]),
       operator: tags.operator ?? null,
       openingHours: tags.opening_hours ?? null,
     });
@@ -137,29 +136,38 @@ function simplifyPlaces(elements: OverpassElement[], boundary: Polygon | MultiPo
   };
 }
 
-async function fetchBoundary(name: string) {
+async function fetchBoundary(code: string) {
   const params = new URLSearchParams({
-    format: "geojson",
-    polygon_geojson: "1",
-    limit: "5",
-    countrycodes: "fi",
-    addressdetails: "1",
-    "accept-language": "fi",
-    q: `${name}, Suomi`,
+    service: "WFS", version: "1.0.0", request: "GetFeature",
+    typeName: "tilastointialueet:kunta1000k_2026",
+    outputFormat: "application/json", srsName: "EPSG:4326",
+    CQL_FILTER: `kunta='${code.slice(2)}'`,
   });
-  const response = await fetch(`${NOMINATIM_URL}?${params}`, {
+  const response = await fetch(`${BOUNDARY_URL}?${params}`, {
     headers: { "User-Agent": APP_USER_AGENT, Accept: "application/geo+json" },
     cache: "force-cache",
     next: { revalidate: 60 * 60 * 24 * 14 },
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) throw new Error(`Nominatim boundary request failed: ${response.status}`);
-  const data = await response.json() as NominatimResponse;
-  return data.features.find((feature): feature is NominatimFeature & { geometry: Polygon | MultiPolygon } =>
-    isSupportedGeometry(feature.geometry) && feature.properties?.category === "boundary",
-  ) ?? data.features.find((feature): feature is NominatimFeature & { geometry: Polygon | MultiPolygon } =>
-    isSupportedGeometry(feature.geometry),
-  );
+  if (!response.ok) throw new Error(`Boundary request failed: ${response.status}`);
+  const data = await response.json() as BoundaryResponse;
+  const feature = data.features?.[0];
+  if (data.features?.length !== 1 || !feature?.geometry || !isSupportedGeometry(feature.geometry) ||
+      feature.properties?.kunta !== code.slice(2) || feature.properties.vuosi !== 2026 ||
+      typeof feature.properties.nimi !== "string") return null;
+  // Derive bounds from the verified geometry, not an unrelated response envelope.
+  const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+  const bbox = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const polygon of polygons) for (const ring of polygon) {
+    if (ring.length < 4) return null;
+    for (const [lon, lat] of ring) {
+      if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) return null;
+      bbox[0] = Math.min(bbox[0], lon); bbox[1] = Math.min(bbox[1], lat);
+      bbox[2] = Math.max(bbox[2], lon); bbox[3] = Math.max(bbox[3], lat);
+    }
+  }
+  if (!bbox.every(Number.isFinite) || bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) return null;
+  return { ...feature, bbox, geometry: feature.geometry };
 }
 
 function fetchOverpassData(bbox: number[]) {
@@ -194,15 +202,15 @@ async function requestOverpassData(bbox: number[]) {
     );
     out center tags;
   `;
-  const options: RequestInit & { next: { revalidate: number } } = {
+  const options: RequestInit = {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
       "User-Agent": APP_USER_AGENT,
     },
     body: new URLSearchParams({ data: query }),
-    cache: "force-cache",
-    next: { revalidate: 60 * 60 * 24 * 7 },
+    // HTTP 200 can contain a timeout remark. Cache only validated successes above.
+    cache: "no-store",
   };
   let lastError: unknown;
   for (const url of OVERPASS_URLS) {
@@ -228,17 +236,17 @@ async function requestOverpassData(bbox: number[]) {
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const code = params.get("code");
-  const name = params.get("name");
-  if (!code?.match(/^KU\d{3}$/) || !name || name.length > 80) {
+  if (!code?.match(/^KU\d{3}$/)) {
     return json({ error: "Invalid municipality parameters." }, { status: 400 });
   }
 
   try {
-    const boundary = await fetchBoundary(name);
+    const boundary = await fetchBoundary(code);
     if (!boundary?.bbox || !isSupportedGeometry(boundary.geometry)) {
       return json({ error: "Kunnan rajaa ei löytynyt avoimista karttalähteistä." }, { status: 404 });
     }
     const boundaryOnly = params.get("details") === "0";
+    const name = boundary.properties.nimi;
     let detailsStatus: "loading" | "ready" | "unavailable" = boundaryOnly ? "loading" : "ready";
     let overpass: OverpassResponse = { elements: [] };
     if (!boundaryOnly) {
@@ -257,9 +265,9 @@ export async function GET(request: NextRequest) {
         type: "Feature",
         geometry: boundary.geometry,
         properties: {
-          name: boundary.properties?.name ?? name,
-          displayName: boundary.properties?.display_name ?? name,
-          source: "OpenStreetMap / Nominatim",
+          name,
+          displayName: name,
+          source: "Tilastokeskus, kuntajako 2026 (1:1 000 000)",
         },
       },
       bbox: boundary.bbox,
@@ -267,7 +275,7 @@ export async function GET(request: NextRequest) {
       places,
       detailsStatus,
       attribution: {
-        boundaryAndPlaces: "© OpenStreetMap contributors",
+        boundaryAndPlaces: "Kuntaraja: Tilastokeskus · Kohteet: © OpenStreetMap contributors",
         populationGrid: "Tilastokeskus, väestöruutuaineisto 1 km x 1 km",
       },
     }, { headers: detailsStatus !== "ready" ? { "Cache-Control": "no-store" } : {} });

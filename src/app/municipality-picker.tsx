@@ -2,7 +2,7 @@
 
 import { ArrowRight, LoaderCircle, Search, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition, type FormEvent } from "react";
+import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
 import type { Municipality } from "@/lib/statfin";
 import { searchMunicipalities } from "@/lib/municipality-search";
 
@@ -11,7 +11,7 @@ type MunicipalityPickerProps = {
   years: string[];
   selectedCode: string;
   selectedYear: string;
-  view?: "trendit";
+  view?: "yleiskuva" | "trendit" | "kartta" | "tilastot";
 };
 
 export default function MunicipalityPicker({ municipalities, years, selectedCode, selectedYear, view }: MunicipalityPickerProps) {
@@ -23,7 +23,12 @@ export default function MunicipalityPicker({ municipalities, years, selectedCode
   const [draftCode, setDraftCode] = useState(selectedCode);
   const [draftYear, setDraftYear] = useState(selectedYear);
   const [isPending, startTransition] = useTransition();
+  const inputRef = useRef<HTMLInputElement>(null);
   const filtered = searchMunicipalities(municipalities, search).slice(0, 8);
+
+  useEffect(() => {
+    if (open && filtered[active]) document.getElementById(`municipality-option-${filtered[active].code}`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active, filtered]);
 
   useEffect(() => {
     function restoreSelection() {
@@ -66,7 +71,7 @@ export default function MunicipalityPicker({ municipalities, years, selectedCode
         <label htmlFor="municipality-search">Hae kuntaa</label>
         <div className="input-wrap">
           <Search size={18} aria-hidden="true" />
-          <input id="municipality-search" type="search" autoComplete="off" value={search}
+          <input ref={inputRef} id="municipality-search" type="search" maxLength={80} autoComplete="off" value={search}
             onChange={(event) => updateSearch(event.target.value)} disabled={isPending}
             onFocus={(event) => { setOpen(true); event.target.select(); }}
             onKeyDown={(event) => {
@@ -74,7 +79,7 @@ export default function MunicipalityPicker({ municipalities, years, selectedCode
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 setOpen(true);
-                setActive((current) => Math.max(0, Math.min(filtered.length - 1, current + (event.key === "ArrowDown" ? 1 : -1))));
+                setActive((current) => !open ? 0 : Math.max(0, Math.min(filtered.length - 1, current + (event.key === "ArrowDown" ? 1 : -1))));
               }
               if (event.key === "Enter" && open && filtered[active]) {
                 event.preventDefault();
@@ -82,10 +87,10 @@ export default function MunicipalityPicker({ municipalities, years, selectedCode
               }
             }}
             role="combobox" aria-autocomplete="list" aria-expanded={open}
-            aria-controls="municipality-options"
+            aria-controls={open ? "municipality-options" : undefined}
             aria-activedescendant={open && filtered[active] ? `municipality-option-${filtered[active].code}` : undefined}
             aria-describedby="search-results" />
-          {search && <button type="button" className="icon-button" onClick={() => updateSearch("")}
+          {search && <button type="button" className="icon-button" onClick={() => { inputRef.current?.focus(); updateSearch(""); }}
             aria-label="Tyhjennä haku" title="Tyhjennä haku" disabled={isPending}><X size={16} /></button>}
         </div>
         {open && <ul id="municipality-options" role="listbox" className="municipality-options" aria-label="Kunnat">
