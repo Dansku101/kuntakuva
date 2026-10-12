@@ -5,6 +5,8 @@ import Module from "node:module";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import ts from "typescript";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,7 +14,7 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 function loadTs(relativePath) {
   const filename = path.resolve(testDirectory, "..", relativePath);
   const compiled = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   const loaded = new Module(filename);
   loaded.filename = filename;
@@ -26,6 +28,96 @@ const { populationChange, populationCsv, relativePopulationPoints } = loadTs("sr
 const { accountsFields, parseAccountsFacts, selectAccountsDataset, getMunicipalityAccounts, expenseShares, perResidentAmount, depreciationCoverage } = loadTs("src/lib/finance.ts");
 const { parseEmployment, getEmploymentTrend } = loadTs("src/lib/employment.ts");
 const { fiveYearPopulationChange, percentagePointChange } = loadTs("src/lib/trends.ts");
+const { searchMunicipalities } = loadTs("src/lib/municipality-search.ts");
+const { GET: getMap } = loadTs("src/app/api/municipality-map/route.ts");
+const { default: TrendSeries } = loadTs("src/app/trend-series.tsx");
+
+test("trend chart server rendering preserves SVG tooltip text without React errors", (context) => {
+  const errors = [];
+  context.mock.method(console, "error", (...args) => errors.push(args));
+  const html = renderToString(createElement(TrendSeries, {
+    title: "Trend", points: [{ year: "2024", value: 7.6 }, { year: "2025", value: null }],
+    note: "Source note", source: "Source", sourceUrl: "https://example.com", color: "#387c99",
+  }));
+  assert.deepEqual(errors, [], "SVG title rendering must not produce React errors");
+  assert.ok(html.includes("<title>2024: 7,6 %</title>"), "The server must render the complete tooltip");
+});
+
+test("map labels prefer Finnish node positions and exclude area centres and localities", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => Response.json(String(url).includes("nominatim") ? {
+    features: [{ type: "Feature", bbox: [24, 60, 25, 61], properties: { category: "boundary" },
+      geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] } }],
+  } : { elements: [
+    { id: 1, type: "node", lat: 60.2, lon: 24.7, tags: { place: "town", name: "Grankulla", "name:fi": "Kauniainen" } },
+    { id: 2, type: "way", center: { lat: 60.3, lon: 24.8 }, tags: { place: "neighbourhood", name: "Area centre" } },
+    { id: 3, type: "node", lat: 60.3, lon: 24.8, tags: { place: "locality", name: "Generic locality" } },
+    { id: 4, type: "node", lat: 62, lon: 24.8, tags: { place: "town", name: "Outside" } },
+  ] });
+  try {
+    const response = await getMap({ nextUrl: new URL("http://localhost/api/municipality-map?code=KU235&name=Kauniainen") });
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.settlements.map(({ name, lat, lon }) => ({ name, lat, lon })),
+      [{ name: "Kauniainen", lat: 60.2, lon: 24.7 }]);
+    const invalid = await getMap({ nextUrl: new URL("http://localhost/api/municipality-map") });
+    assert.equal(invalid.headers.get("Cache-Control"), "no-store");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("municipality search ranks spelling mistakes and partial names", () => {
+  const items = [{ code: "KU235", name: "Kauniainen" }, { code: "KU091", name: "Helsinki" },
+    { code: "KU049", name: "Espoo" }, { code: "KU905", name: "Vaasa" }];
+  for (const query of ["kauniaien", "kauninen", "kauni", " KAUNIAINEN "]) {
+    assert.equal(searchMunicipalities(items, query)[0]?.code, "KU235", query);
+  }
+  assert.equal(searchMunicipalities(items, "helsnki")[0]?.code, "KU091");
+  assert.deepEqual(searchMunicipalities(items, "xyzxyz"), []);
+  assert.equal(searchMunicipalities(items, "ka").length, 1);
+});
+
+test("map keeps its boundary during outages, fails over and reuses successful place data", async () => {
+  const { GET } = loadTs("src/app/api/municipality-map/route.ts");
+  const originalFetch = globalThis.fetch;
+  let requests = [];
+  let available = false;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("nominatim")) return Response.json({ features: [{
+      type: "Feature", bbox: [24, 60, 25, 61], properties: { category: "boundary" },
+      geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] },
+    }] });
+    requests.push(String(url));
+    if (!available || String(url).includes("private.coffee")) return new Response("Timeout", { status: 504 });
+    return Response.json({ elements: [{ type: "node", id: 1, lat: 60.2, lon: 24.7, tags: { name: "Kirjasto", amenity: "library" } }] });
+  };
+  const request = (details) => ({ nextUrl: new URL(`http://localhost/api/municipality-map?code=KU235&name=Kauniainen&details=${details}`) });
+  try {
+    const boundary = await GET(request("0"));
+    assert.equal((await boundary.json()).detailsStatus, "loading");
+    assert.equal(requests.length, 0, "Boundary loading must not wait for Overpass");
+    const partial = await GET(request("1"));
+    const partialData = await partial.json();
+    assert.equal(partial.status, 200);
+    assert.equal(partialData.boundary.geometry.type, "Polygon");
+    assert.equal(partialData.detailsStatus, "unavailable");
+    assert.equal(partial.headers.get("Cache-Control"), "no-store");
+    assert.equal(requests.length, 2);
+    available = true;
+    requests = [];
+    const recovered = await GET(request("1"));
+    const recoveredData = await recovered.json();
+    assert.equal(recoveredData.detailsStatus, "ready");
+    assert.equal(recoveredData.places[0].name, "Kirjasto");
+    assert.ok(requests[0].includes("private.coffee"));
+    assert.ok(requests[1].includes("overpass-api.de"));
+    await GET(request("1"));
+    assert.equal(requests.length, 2, "Successful data must be reused");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 const areaCode = "alue_23_20260101";
 const yearCode = "timeperiod_y";
 

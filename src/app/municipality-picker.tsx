@@ -4,79 +4,104 @@ import { ArrowRight, LoaderCircle, Search, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition, type FormEvent } from "react";
 import type { Municipality } from "@/lib/statfin";
+import { searchMunicipalities } from "@/lib/municipality-search";
 
 type MunicipalityPickerProps = {
   municipalities: Municipality[];
   years: string[];
   selectedCode: string;
   selectedYear: string;
+  view?: "trendit";
 };
 
-export default function MunicipalityPicker({ municipalities, years, selectedCode, selectedYear }: MunicipalityPickerProps) {
+export default function MunicipalityPicker({ municipalities, years, selectedCode, selectedYear, view }: MunicipalityPickerProps) {
   const router = useRouter();
-  const [search, setSearch] = useState("");
+  const selectedName = municipalities.find((item) => item.code === selectedCode)?.name ?? "";
+  const [search, setSearch] = useState(selectedName);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
   const [draftCode, setDraftCode] = useState(selectedCode);
   const [draftYear, setDraftYear] = useState(selectedYear);
   const [isPending, startTransition] = useTransition();
-  const normalizedSearch = search.trim().toLocaleLowerCase("fi-FI");
-  const filtered = municipalities.filter((municipality) =>
-    municipality.name.toLocaleLowerCase("fi-FI").includes(normalizedSearch),
-  );
+  const filtered = searchMunicipalities(municipalities, search).slice(0, 8);
 
   useEffect(() => {
     function restoreSelection() {
-      setSearch("");
+      setSearch(selectedName);
+      setOpen(false);
       setDraftCode(selectedCode);
       setDraftYear(selectedYear);
     }
     window.addEventListener("pageshow", restoreSelection);
     return () => window.removeEventListener("pageshow", restoreSelection);
-  }, [selectedCode, selectedYear]);
+  }, [selectedCode, selectedYear, selectedName]);
 
   function updateSearch(value: string) {
     setSearch(value);
-    if (!value.trim() && !draftCode) {
-      setDraftCode(selectedCode);
-      return;
-    }
-    if (!municipalities.some((item) => item.code === draftCode &&
-        item.name.toLocaleLowerCase("fi-FI").includes(value.trim().toLocaleLowerCase("fi-FI")))) {
-      setDraftCode("");
-    }
+    setOpen(true);
+    setActive(0);
+    setDraftCode(municipalities.find((item) => item.name.toLocaleLowerCase("fi-FI") === value.trim().toLocaleLowerCase("fi-FI"))?.code ?? "");
+  }
+
+  function selectMunicipality(item: Municipality) {
+    setSearch(item.name);
+    setDraftCode(item.code);
+    setOpen(false);
   }
 
   function navigate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!municipalities.some((item) => item.code === draftCode) || !years.includes(draftYear)) return;
     const params = new URLSearchParams({ kunta: draftCode, vuosi: draftYear });
+    if (view) params.set("nakyma", view);
     startTransition(() => router.push(`/?${params.toString()}`, { scroll: false }));
-    setSearch("");
+    setOpen(false);
   }
 
   return (
     <form action="/" method="get" onSubmit={navigate} className="picker" aria-busy={isPending}>
-      <div className="field search-field">
+      <div className="field search-field" onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}>
         <label htmlFor="municipality-search">Hae kuntaa</label>
         <div className="input-wrap">
           <Search size={18} aria-hidden="true" />
           <input id="municipality-search" type="search" autoComplete="off" value={search}
             onChange={(event) => updateSearch(event.target.value)} disabled={isPending}
+            onFocus={(event) => { setOpen(true); event.target.select(); }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setOpen(false);
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                setOpen(true);
+                setActive((current) => Math.max(0, Math.min(filtered.length - 1, current + (event.key === "ArrowDown" ? 1 : -1))));
+              }
+              if (event.key === "Enter" && open && filtered[active]) {
+                event.preventDefault();
+                selectMunicipality(filtered[active]);
+              }
+            }}
+            role="combobox" aria-autocomplete="list" aria-expanded={open}
+            aria-controls="municipality-options"
+            aria-activedescendant={open && filtered[active] ? `municipality-option-${filtered[active].code}` : undefined}
             aria-describedby="search-results" />
           {search && <button type="button" className="icon-button" onClick={() => updateSearch("")}
             aria-label="Tyhjennä haku" title="Tyhjennä haku" disabled={isPending}><X size={16} /></button>}
         </div>
+        {open && <ul id="municipality-options" role="listbox" className="municipality-options" aria-label="Kunnat">
+          {filtered.map((item, index) => <li key={item.code} id={`municipality-option-${item.code}`}
+            role="option" aria-selected={index === active} onMouseDown={(event) => event.preventDefault()}
+            onMouseEnter={() => setActive(index)} onClick={() => selectMunicipality(item)}>
+            <span>{item.name}</span><small>{item.code.slice(2)}</small>
+          </li>)}
+          {!filtered.length && <li className="no-results" role="presentation">Ei hakutuloksia</li>}
+        </ul>}
         <span id="search-results" className="field-note" role="status">
-          {search ? `${filtered.length} hakutulosta` : `${municipalities.length} kuntaa`}
+          {open ? `${filtered.length} ehdotusta` : `${municipalities.length} kuntaa`}
         </span>
       </div>
-      <div className="field">
-        <label htmlFor="municipality">Kunta</label>
-        <select id="municipality" name="kunta" required value={draftCode}
-          onChange={(event) => setDraftCode(event.target.value)} disabled={isPending}>
-          <option value="" disabled>{filtered.length ? "Valitse kunta" : "Ei hakutuloksia"}</option>
-          {filtered.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}
-        </select>
-      </div>
+      <input type="hidden" name="kunta" value={draftCode} />
+      {view && <input type="hidden" name="nakyma" value={view} />}
       <div className="field year-field">
         <label htmlFor="year">Vuosi</label>
         <select id="year" name="vuosi" value={draftYear} onChange={(event) => setDraftYear(event.target.value)} disabled={isPending}>

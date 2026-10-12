@@ -5,11 +5,13 @@ import MunicipalityPicker from "./municipality-picker";
 import PopulationChart from "./population-chart";
 import MunicipalityOverview from "./municipality-overview";
 import MunicipalityFinance from "./municipality-finance";
+import MunicipalityMap from "./municipality-map";
 import MunicipalityTrends from "./municipality-trends";
+import MunicipalityHistory from "./municipality-history";
 import { Suspense } from "react";
 
 export default async function Home({ searchParams }: {
-  searchParams: Promise<{ kunta?: string | string[]; vuosi?: string | string[] }>;
+  searchParams: Promise<{ kunta?: string | string[]; vuosi?: string | string[]; nakyma?: string | string[] }>;
 }) {
   const [{ municipalities, years }, params] = await Promise.all([getMunicipalityCatalog(), searchParams]);
   const selectedCode = typeof params.kunta === "string" && municipalities.some((item) => item.code === params.kunta)
@@ -17,6 +19,8 @@ export default async function Home({ searchParams }: {
   const selectedYear = typeof params.vuosi === "string" && years.includes(params.vuosi)
     ? params.vuosi : years[years.length - 1];
   // One extra year supports the first visible row's annual-change calculation.
+  const trendsView = params.nakyma === "trendit";
+  const baseUrl = `/?${new URLSearchParams({ kunta: selectedCode, vuosi: selectedYear })}`;
   const requestedYears = years.filter((year) => Number(year) <= Number(selectedYear)).slice(-21);
   const series = await getPopulationSeries(selectedCode, requestedYears);
   const current = series.points[series.points.length - 1];
@@ -34,7 +38,7 @@ export default async function Home({ searchParams }: {
       <section className="control-band" aria-label="Kunnan ja vuoden valinta">
         <div className="shell">
           <MunicipalityPicker key={`${selectedCode}-${selectedYear}`} municipalities={municipalities}
-            years={years} selectedCode={selectedCode} selectedYear={selectedYear} />
+            years={years} selectedCode={selectedCode} selectedYear={selectedYear} view={trendsView ? "trendit" : undefined} />
         </div>
       </section>
       <div className="shell dashboard">
@@ -42,7 +46,7 @@ export default async function Home({ searchParams }: {
           <div>
             <p className="breadcrumb"><MapPin size={14} aria-hidden="true" />Suomi<span>/</span>Kuntatilastot</p>
             <h1>{series.municipalityName}</h1>
-            <p className="page-subtitle">Kunnan yleiskuva</p>
+            <p className="page-subtitle">{trendsView ? "Kunnan kehitys ajan mittaan" : "Kunnan yleiskuva"}</p>
           </div>
           <span className="year-badge"><CalendarDays size={16} aria-hidden="true" />31.12.{selectedYear}</span>
         </div>
@@ -50,6 +54,21 @@ export default async function Home({ searchParams }: {
         <Suspense fallback={<section className="trend-profile" aria-busy="true"><h2>Kunnan suunta</h2><div className="metrics">{[1, 2, 3].map((id) => <div key={id} className="metric"><div className="skeleton skeleton-label" /><div className="skeleton skeleton-value" /></div>)}</div></section>}>
           <MunicipalityTrends series={series} year={selectedYear} />
         </Suspense>
+
+        <nav className="view-tabs" aria-label="Kuntakuvan osiot">
+          <Link href={baseUrl} aria-current={!trendsView ? "page" : undefined} scroll={false}>Yleiskuva</Link>
+          <Link href={`${baseUrl}&nakyma=trendit`} aria-current={trendsView ? "page" : undefined} scroll={false}>Trendit</Link>
+          <Link href={`${baseUrl}#explore-map`}>Tutki kartalla</Link>
+          <Link href={`${baseUrl}#statistics`}>Tilastot</Link>
+        </nav>
+
+        {trendsView ? <div className="history-view">
+          <PopulationChart key={`${selectedCode}-${selectedYear}-history`} series={series} />
+          <Suspense fallback={<section className="history-loading" aria-busy="true"><p>Haetaan työllisyyden ja talouden aikasarjoja…</p></section>}>
+            <MunicipalityHistory code={selectedCode} year={selectedYear} />
+          </Suspense>
+        </div> : <>
+        <div id="overview" className="section-anchor" />
 
         <div className="dashboard-grid">
           <PopulationChart key={`${selectedCode}-${selectedYear}`} series={series} />
@@ -70,6 +89,9 @@ export default async function Home({ searchParams }: {
           </aside>
         </div>
 
+        <MunicipalityMap key={selectedCode} code={selectedCode} name={series.municipalityName} year={selectedYear} />
+
+        <div id="statistics" className="section-anchor" />
         <Suspense fallback={<section className="overview-section" aria-busy="true"><h2>Väestörakenne</h2><p className="overview-note">Haetaan tietoja…</p></section>}>
           <MunicipalityOverview code={selectedCode} name={series.municipalityName} year={selectedYear} />
         </Suspense>
@@ -78,12 +100,15 @@ export default async function Home({ searchParams }: {
           <MunicipalityFinance code={selectedCode} name={series.municipalityName} year={selectedYear} population={current.population} />
         </Suspense>
 
+        </>}
+
         <nav className="municipality-links" aria-label="Siirry kuntaan">
           <h2>Muita kuntia</h2>
           <div>{popular.map((item) => <Link key={item.code} prefetch={false}
             href={`/?${new URLSearchParams({
               kunta: item.code,
               vuosi: selectedYear,
+              ...(trendsView ? { nakyma: "trendit" } : {}),
             })}`}
             aria-current={item.code === selectedCode ? "page" : undefined}>
             {item.name}<ArrowUpRight size={15} aria-hidden="true" />
