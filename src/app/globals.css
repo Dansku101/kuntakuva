@@ -414,12 +414,22 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
 .comparison-section h2 { font-size: 18px; }
 .comparison-table { table-layout: fixed; }
 .comparison-table th, .comparison-table td { white-space: normal; overflow-wrap: anywhere; }
-.comparison-table th:first-child { width: 44%; }
+.comparison-table th:first-child { width: 34%; }
 .comparison-table thead th { position: static; }
 .comparison-table th:nth-child(2), .comparison-table td:nth-child(2) { background: #f0f6f8; }
 .comparison-table th:nth-child(3), .comparison-table td:nth-child(3) { background: #f8f1f2; }
 .comparison-table td { font-size: 17px; }
 .comparison-table small { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; font-weight: 400; }
+.comparison-table caption { text-align: left; font-size: 12px; color: var(--muted); padding-bottom: 12px; }
+.comparison-table .mobile-difference { display: none; }
+.comparison-loading { min-height: 290px; }
+.comparison-loading p { color: var(--muted); font-size: 13px; }
+.comparison-failure { min-height: 180px; }
+.comparison-failure .button { margin-block: 12px; }
+.municipality-options .municipality-alias { display: block; margin-top: 2px; }
+.statistics-topics { display: flex; flex-wrap: wrap; gap: 4px 24px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.statistics-topics a { display: inline-flex; align-items: center; min-height: 44px; font-size: 13px; color: var(--accent); text-decoration: underline; text-underline-offset: 4px; }
+#demographics-heading, #finance-heading, #climate-summary { scroll-margin-top: 80px; }
 .history-readout { flex-wrap: wrap; }
 .history-readout strong { overflow-wrap: anywhere; }
 #people-heading, #energy-heading { scroll-margin-top: 80px; }
@@ -435,5 +445,22 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
   .comparison-actions { padding-top: 0; margin-left: auto; }
   .comparison-section .section-heading { flex-wrap: wrap; gap: 8px; }
   .comparison-table th, .comparison-table td { padding: 12px 8px; }
+  .comparison-table thead th { padding-inline: 6px; font-size: 11px; }
   .comparison-table td { font-size: 14px; }
+  .comparison-table th:first-child { width: 44%; }
+  .comparison-table .difference-column { display: none; }
+  .comparison-table .mobile-difference { display: block; margin-top: 8px; color: var(--foreground); }
+  .header-inner { min-height: 54px; }
+  .control-band .picker { grid-template-columns: minmax(0, 1fr) 108px; gap: 8px 12px; padding-block: 12px; }
+  .control-band .search-field { grid-column: 1; }
+  .control-band .year-field { grid-column: 2; grid-row: 1; }
+  .control-band .picker-submit { grid-column: 1 / -1; grid-row: 2; margin-top: 0; min-height: 40px; }
+  .control-band .field-note { position: absolute; width: 1px; height: 1px; min-height: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .dashboard { padding-top: 20px; }
+  .page-heading { flex-direction: row; padding-bottom: 18px; gap: 12px; }
+  .page-heading h1 { font-size: 28px; overflow-wrap: anywhere; }
+  .page-heading .breadcrumb { display: none; }
+  .page-heading .year-badge { display: none; }
+  .page-subtitle { font-size: 12px; }
+  .statistics-topics { gap: 0 18px; margin-bottom: 16px; }
 }

@@ -7,7 +7,7 @@ const CONTENTS_VARIABLE_CODE = "contentscode";
 const POPULATION_VALUE_CODE = "vaerak-vaesto";
 const YEAR_VARIABLE_CODE = "timeperiod_y";
 
-export type Municipality = { code: string; name: string };
+export type Municipality = { code: string; name: string; aliases?: string[] };
 export type MunicipalityCatalog = { municipalities: Municipality[]; years: string[] };
 export type PopulationPoint = { year: string; population: number | null };
 export const demographicIndicators = {
@@ -15,14 +15,16 @@ export const demographicIndicators = {
   workingAge: "vaesto_15_64_p",
   seniors: "vaesto_yli64_p",
   averageAge: "vaesto_keski_ika",
-  finnish: "vaesto_kieli_fi_p",
-  swedish: "vaesto_kieli_sv_p",
-  otherLanguages: "vaesto_kieli_ulk_p",
+  finnish: "vaesto_kieli_fi",
+  swedish: "vaesto_kieli_sv",
+  sami: "vaesto_kieli_se",
+  otherLanguages: "vaesto_kieli_ulk",
+  population: "vaerak-vaesto",
   density: "vaerak-vaesto_maa_pa",
 } as const;
 export type DemographicProfile = {
   year: string;
-  values: Record<keyof typeof demographicIndicators, number | null>;
+  values: Record<Exclude<keyof typeof demographicIndicators, "population">, number | null>;
 };
 export type PopulationSeries = {
   municipalityCode: string;
@@ -92,11 +94,25 @@ export async function getMunicipalityCatalog(): Promise<MunicipalityCatalog> {
   if (!response.ok) throw new Error(`Statistics Finland metadata request failed: ${response.status}.`);
   const data = (await response.json()) as PxWebMetadataResponse;
   const areas = getVariable(data, AREA_VARIABLE_CODE);
+  let aliases = new Map<string, string>();
+  try {
+    const swedish = await fetch(STATFIN_POPULATION_URL.replace("/fi/", "/sv/"), {
+      cache: "force-cache", next: { revalidate: 60 * 60 * 24 }, signal: AbortSignal.timeout(3_000),
+    });
+    if (!swedish.ok) throw new Error(`Swedish metadata request failed: ${swedish.status}`);
+    const translated = getVariable(await swedish.json() as PxWebMetadataResponse, AREA_VARIABLE_CODE);
+    if (new Set(translated.values).size !== translated.values.length) throw new Error("Duplicate Swedish area codes");
+    aliases = new Map(translated.values.map((code, index) => [code, translated.valueTexts[index]]));
+  } catch (error) {
+    // Translation availability must not take down the Finnish catalog.
+    console.warn("Swedish municipality names unavailable:", error);
+  }
   const municipalities = areas.values.flatMap((code, index) => {
     if (!/^KU\d{3}$/.test(code)) return [];
     const name = areas.valueTexts[index];
     if (!name) throw new Error(`Statistics Finland is missing the name for ${code}.`);
-    return [{ code, name }];
+    const alias = aliases.get(code);
+    return [{ code, name, ...(alias && alias !== name ? { aliases: [alias] } : {}) }];
   });
   const years = getVariable(data, YEAR_VARIABLE_CODE).values
     .filter((year) => /^\d{4}$/.test(year))
@@ -140,16 +156,27 @@ export async function getDemographicProfile(municipalityCode: string, year: stri
       data.size[metricPosition] !== Object.keys(demographicIndicators).length) {
     throw new Error("Unexpected demographic dimensions.");
   }
-  const values = Object.fromEntries(Object.entries(demographicIndicators).map(([key, code]) => {
+  const languageKeys = ["finnish", "swedish", "sami", "otherLanguages"] as const;
+  const raw = Object.fromEntries(Object.entries(demographicIndicators).map(([key, code]) => {
     const index = Array.isArray(metricIndex) ? metricIndex.indexOf(code) : metricIndex[code];
     const value = data.value[index];
     if (!Number.isInteger(index) || index < 0 ||
         (value !== null && (typeof value !== "number" || !Number.isFinite(value) || value < 0 ||
-          (key !== "density" && value > 100)))) {
+          ((key === "population" || languageKeys.some((language) => language === key))
+            ? !Number.isSafeInteger(value) : key !== "density" && value > 100)))) {
       throw new Error(`Invalid demographic value for ${code}.`);
     }
     return [key, value];
-  })) as DemographicProfile["values"];
+  })) as Record<keyof typeof demographicIndicators, number | null>;
+  const { population, ...values } = raw;
+  const counts = languageKeys.map((key) => raw[key]);
+  if (population !== null && (counts.some((count) => count !== null && count > population) ||
+      counts.every((count) => count !== null) && counts.reduce((sum, count) => sum + count, 0) !== population)) {
+    throw new Error("Language counts do not reconcile with population.");
+  }
+  for (const key of languageKeys) {
+    values[key] = population !== null && population > 0 && raw[key] !== null ? raw[key] / population * 100 : null;
+  }
   return { year, values };
 }
 

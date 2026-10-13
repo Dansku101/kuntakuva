@@ -95,14 +95,17 @@ export default async function Home({ searchParams }: {
             </div>}
           </div>
           {peer ? <>
-            <p className="people-note">Kullakin rivillä sama havaintovuosi molemmille kunnille, enintään {selectedYear}. Puuttuvia tietoja ei korvata nollilla.</p>
-            <Suspense fallback={<p className="history-loading" role="status">Haetaan kuntien vertailutietoja…</p>}>
-              <MunicipalityComparison primary={{ code: selectedCode, name }} peer={peer} year={selectedYear} />
-            </Suspense>
+            <p className="people-note">Kullakin rivillä sama havaintovuosi molemmille kunnille, enintään {selectedYear}. Puuttuvia tietoja ei korvata nollilla. Erot lasketaan pyöristämättömistä arvoista.</p>
+            <MunicipalityComparison primary={{ code: selectedCode, name }} peer={peer} year={selectedYear} />
           </> : <div className="comparison-empty"><ArrowLeftRight size={28} aria-hidden="true" /><h2>{name} ja…</h2><p>Vertailukuntaa ei ole valittu.</p></div>}
         </>}
         {view.id === "kartta" && <MunicipalityMap key={`${selectedCode}-${selectedYear}`} code={selectedCode} name={name} year={selectedYear} />}
         {view.id === "tilastot" && series && <>
+          <nav className="statistics-topics" aria-label="Tilastojen aiheet">
+            <a href="#demographics-heading">Väestö</a><a href="#finance-heading">Talous</a>
+            <a href="#people-heading">Koulutus ja siviilisääty</a><a href="#energy-heading">Lämmitys</a>
+            <a href="#climate-summary">Energia ja päästöt</a>
+          </nav>
           <p className="view-intro">Väestö, toteutunut kuntatalous ja energia omilla havaintovuosillaan. Talouden varmennettu kattavuus on 2024–2025.</p>
           <Suspense fallback={<p className="history-loading" role="status">Haetaan väestörakennetta…</p>}>
             <MunicipalityOverview code={selectedCode} name={name} year={selectedYear} />

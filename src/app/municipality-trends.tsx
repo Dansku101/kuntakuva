@@ -3,6 +3,7 @@ import { getEmploymentTrend } from "@/lib/employment";
 import { depreciationCoverage, getMunicipalityAccounts } from "@/lib/finance";
 import { fiveYearPopulationChange, percentagePointChange } from "@/lib/trends";
 import { populationFormat } from "@/lib/population";
+import { sameFinancialArea } from "@/lib/financial-geography";
 import type { PopulationSeries } from "@/lib/statfin";
 
 const percent = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 });
@@ -29,8 +30,9 @@ export default async function MunicipalityTrends({ series, year }: { series: Pop
   const previous = previousAccounts.status === "fulfilled" ? previousAccounts.value : null;
   const coverage = current ? depreciationCoverage(current.values) : null;
   const previousCoverage = previous ? depreciationCoverage(previous.values) : null;
-  const financeChange = percentagePointChange({ year, value: coverage },
-    previous ? { year: previous.year, value: previousCoverage } : undefined);
+  const financeAreaMatches = previous ? sameFinancialArea(code, previous.year, year) : true;
+  const financeChange = financeAreaMatches ? percentagePointChange({ year, value: coverage },
+    previous ? { year: previous.year, value: previousCoverage } : undefined) : null;
   const growth = fiveYearPopulationChange(series.points, year);
   const population = series.points.find((p) => p.year === year)?.population ?? null;
   return <section className="trend-profile" aria-labelledby="profile-heading">
@@ -54,7 +56,7 @@ export default async function MunicipalityTrends({ series, year }: { series: Pop
         <div className="metric-label"><Activity size={17} aria-hidden="true" /><h3>Tulorahoitus · {year}</h3></div>
         <p className="metric-value">{coverage === null ? "Ei tietoa" : `${percent.format(coverage)} %`}</p>
         <p className={`profile-status ${coverage === null ? "" : coverage >= 100 ? "positive" : "negative"}`}>{coverage === null ? currentAccounts.status === "rejected" ? "Lähde ei juuri nyt vastaa" : "Varmennettu toteuma puuttuu" : coverage >= 100 ? "Vuosikate kattaa poistot" : "Vuosikate ei kata poistoja"}</p>
-        <p className="metric-detail">{financeChange === null ? "Vuosikate / poistot ja arvonalentumiset" : `${signed.format(financeChange)} prosenttiyks. vuodessa`}</p>
+        <p className="metric-detail">{!financeAreaMatches ? "Kuntaraja muuttunut · ei vuosivertailua" : financeChange === null ? "Vuosikate / poistot ja arvonalentumiset" : `${signed.format(financeChange)} prosenttiyks. vuodessa`}</p>
       </div>
     </div>
     <details className="data-disclosure profile-method">

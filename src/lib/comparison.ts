@@ -3,9 +3,12 @@ import { getPeopleProfile, higherEducationShare } from "./people";
 import { getHeatingProfile } from "./energy";
 import { getClimateProfile } from "./climate";
 import { getMunicipalityAccounts, incomeStatementTotals, perResidentAmount } from "./finance";
+import { compatibleFinancialPopulation } from "./financial-geography";
 
 export type ComparisonRow = { label: string; unit: string; year: string | null; values: [number | null, number | null] };
 export type ComparisonGroup = { title: string; note: string; source: string; href: string; rows: ComparisonRow[]; failed: boolean };
+export const comparisonSectionIds = ["population", "education", "finance", "heating", "climate"] as const;
+export type ComparisonSectionId = typeof comparisonSectionIds[number];
 
 // A provider returns its latest observation at or before the cutoff. Walk backwards
 // until both observations share a year; never silently compare different years.
@@ -23,11 +26,12 @@ export async function commonProfiles<T extends { year: string }>(
   throw new Error("No common comparison year found");
 }
 
-export async function getComparison(codes: [string, string], year: string): Promise<ComparisonGroup[]> {
+export function getComparisonSections(codes: [string, string], year: string) {
   const row = <T extends { year: string }>(pair: [T, T] | null, label: string, unit: string, value: (profile: T) => number | null): ComparisonRow =>
     ({ label, unit, year: pair?.[0].year ?? null, values: pair ? [value(pair[0]), value(pair[1])] : [null, null] });
-  const sections = [
+  return [
     {
+      id: "population" as const,
       title: "Väestö", note: "Vuoden lopun väestö, aluejako 2026. Ikäryhmien osuudet koko väestöstä.",
       source: "Tilastokeskus · 11ra", href: "https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vaerak/11ra.px/",
       load: async () => {
@@ -41,6 +45,7 @@ export async function getComparison(codes: [string, string], year: string): Prom
       },
     },
     {
+      id: "education" as const,
       title: "Koulutus", note: "Korkea-aste sisältää tutkintotasot 5–8. Osuudet 15 vuotta täyttäneistä, aluejako 2026.",
       source: "Tilastokeskus · 12bq", href: "https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vkour/12bq.px/",
       load: async () => {
@@ -50,14 +55,15 @@ export async function getComparison(codes: [string, string], year: string): Prom
       },
     },
     {
-      title: "Talous", note: "Kunnan tilinpäätös, ei konserni. Tulot ja kulut sisältävät tuloslaskelman erät, eivät lainoja tai investointeja. Asukaskohtaiset luvut: saman vuoden lopun väestö (aluejako 2026); kuntaliitokset voivat rajoittaa vertailua. Varmennettu kattavuus 2024–2025.",
+      id: "finance" as const,
+      title: "Talous", note: "Kunnan tilinpäätös, ei konserni. Tulot ja kulut sisältävät tuloslaskelman erät, eivät lainoja tai investointeja. Asukaskohtainen luku jätetään puuttuvaksi, jos tilinpäätöksen kuntaraja poikkeaa väestöaineiston vuoden 2026 aluejaosta. Varmennettu kattavuus 2024–2025.",
       source: "Valtiokonttori · KKNR", href: "https://www.valtiokonttori.fi/palvelu/kuntien-ja-kuntayhtymien-taloustietojen-raportointi/",
       load: async () => {
         const pair = await commonProfiles(async (code, y) => {
           const accounts = await getMunicipalityAccounts(code, y);
           if (!accounts) return null;
           const population = (await getPopulationSeries(code, [accounts.year])).points.find((p) => p.year === accounts.year)?.population ?? null;
-          return { ...accounts, population, totals: incomeStatementTotals(accounts.values) };
+          return { ...accounts, population: compatibleFinancialPopulation(code, accounts.year, population), totals: incomeStatementTotals(accounts.values) };
         }, codes, year);
         return [row(pair, "Tulot yhteensä", "€/asukas", (p) => perResidentAmount(p.totals.income, p.population)),
           row(pair, "Kulut yhteensä", "€/asukas", (p) => perResidentAmount(p.totals.expenses, p.population)),
@@ -65,6 +71,7 @@ export async function getComparison(codes: [string, string], year: string): Prom
       },
     },
     {
+      id: "heating" as const,
       title: "Rakennusten lämmitys", note: "Osuudet rakennusten lukumäärästä, eivät energiankulutuksesta. Rekisteritieto, aluejako 2026. Nykyinen kattavuus 2025.",
       source: "Tilastokeskus · 15er", href: "https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/raku/15er.px/",
       load: async () => {
@@ -75,6 +82,7 @@ export async function getComparison(codes: [string, string], year: string): Prom
       },
     },
     {
+      id: "climate" as const,
       title: "Energia ja päästöt", note: "Kuntien kokonaismäärät, eivät asukaskohtaisia. Hinku-laskenta, ilman päästöhyvityksiä tai maankäyttöä; ei koko hiilijalanjälki. Tuulivoima on tuotantoa, ei kulutusta.",
       source: "Syke · Hinku", href: "https://paastot.hiilineutraalisuomi.fi/",
       load: async () => {
@@ -84,8 +92,19 @@ export async function getComparison(codes: [string, string], year: string): Prom
       },
     },
   ];
-  return Promise.all(sections.map(async ({ load, ...section }) => {
-    try { return { ...section, rows: await load(), failed: false }; }
-    catch (error) { console.warn(`Comparison unavailable: ${section.title}`, error); return { ...section, rows: [], failed: true }; }
-  }));
+}
+
+export async function loadComparisonSection({ load, ...section }: ReturnType<typeof getComparisonSections>[number]): Promise<ComparisonGroup> {
+  try { return { ...section, rows: await load(), failed: false }; }
+  catch (error) { console.warn(`Comparison unavailable: ${section.title}`, error); return { ...section, rows: [], failed: true }; }
+}
+
+export async function getComparisonGroup(id: ComparisonSectionId, codes: [string, string], year: string): Promise<ComparisonGroup> {
+  const section = getComparisonSections(codes, year).find((section) => section.id === id);
+  if (!section) throw new Error("Unknown comparison section");
+  return loadComparisonSection(section);
+}
+
+export async function getComparison(codes: [string, string], year: string): Promise<ComparisonGroup[]> {
+  return Promise.all(getComparisonSections(codes, year).map(loadComparisonSection));
 }

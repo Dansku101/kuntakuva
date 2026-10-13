@@ -4,7 +4,7 @@ import { ArrowRight, LoaderCircle, Search, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, useTransition, type FormEvent } from "react";
 import type { Municipality } from "@/lib/statfin";
-import { searchMunicipalities } from "@/lib/municipality-search";
+import { matchesMunicipalityName, searchMunicipalities } from "@/lib/municipality-search";
 
 type MunicipalityPickerProps = {
   municipalities: Municipality[];
@@ -48,7 +48,7 @@ export default function MunicipalityPicker({ municipalities, years, selectedCode
     setSearch(value);
     setOpen(true);
     setActive(0);
-    setDraftCode(municipalities.find((item) => item.name.toLocaleLowerCase("fi-FI") === value.trim().toLocaleLowerCase("fi-FI"))?.code ?? "");
+    setDraftCode(municipalities.find((item) => matchesMunicipalityName(item, value))?.code ?? "");
   }
 
   function selectMunicipality(item: Municipality) {
@@ -102,7 +102,7 @@ export default function MunicipalityPicker({ municipalities, years, selectedCode
           {filtered.map((item, index) => <li key={item.code} id={`${id}-option-${item.code}`}
             role="option" aria-selected={index === active} onMouseDown={(event) => event.preventDefault()}
             onMouseEnter={() => setActive(index)} onClick={() => selectMunicipality(item)}>
-            <span>{item.name}</span><small>{item.code.slice(2)}</small>
+            <span>{item.name}{item.aliases?.length ? <small className="municipality-alias">{item.aliases.join(" · ")}</small> : null}</span><small>{item.code.slice(2)}</small>
           </li>)}
           {!filtered.length && <li className="no-results" role="presentation">Ei hakutuloksia</li>}
         </ul>}

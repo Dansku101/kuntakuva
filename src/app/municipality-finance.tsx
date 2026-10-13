@@ -1,5 +1,6 @@
 import { ExternalLink } from "lucide-react";
 import { expenseShares, getMunicipalityAccounts, incomeStatementTotals, perResidentAmount } from "@/lib/finance";
+import { compatibleFinancialPopulation, sameFinancialArea } from "@/lib/financial-geography";
 
 const euros = new Intl.NumberFormat("fi-FI", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const millions = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 2 });
@@ -18,6 +19,8 @@ export default async function MunicipalityFinance({ code, name, year, population
     <p className="overview-note">{failed ? "Tilinpäätöstietoja ei juuri nyt saada lähteestä." : `Vuoden ${year} varmennettuja tilinpäätöstietoja ei ole saatavilla tässä näkymässä. Varmennettu kattavuus: 2024–2025.`} Talousarvioita tai ennusteita ei esitetä toteumina.</p>
   </section>;
   const v = accounts.values;
+  const areaMatches = sameFinancialArea(code, accounts.year, "2026");
+  population = compatibleFinancialPopulation(code, accounts.year, population);
   const shares = expenseShares(v);
   const totals = incomeStatementTotals(v);
   const expenses = [
@@ -55,6 +58,7 @@ export default async function MunicipalityFinance({ code, name, year, population
       <div><dt>{v.surplus === null ? "Tilikauden ylijäämä / alijäämä" : v.surplus < 0 ? "Tilikauden alijäämä" : "Tilikauden ylijäämä"}</dt><dd className={v.surplus === null ? "" : v.surplus < 0 ? "negative" : "positive"} title={money(v.surplus)}>{compact(v.surplus)}</dd><dd className="finance-detail">Tilinpäätössiirtojen jälkeen · ei budjetin ylitys</dd></div>
     </dl>
     <p className="overview-note finance-note">Tulot ja kulut ovat tuloslaskelmasta. Investoinnit, lainojen nostot ja lyhennykset eivät sisälly näihin summiin. Valmistus omaan käyttöön ja tilinpäätössiirrot vaikuttavat lisäksi ylijäämään.{!totals.reconciled && " Yhteissummia ei näytetä: erittely on puutteellinen tai ei täsmää tilikauden tulokseen."}</p>
+    {!areaMatches && <p className="overview-note finance-note">Asukaskohtaisia lukuja ei näytetä: tilinpäätöksen kuntaraja poikkeaa väestöaineiston vuoden 2026 aluejaosta. Yhteissummat kuvaavat tilinpäätösvuoden kuntaa.</p>}
     <dl className="finance-context">
       <div><dt>Toimintakulut</dt><dd>{compact(v.operatingExpenses)}</dd></div>
       <div><dt>Investoinnit erikseen</dt><dd>{compact(v.investments)}<small>Toteutuneet bruttoinvestoinnit</small></dd></div>

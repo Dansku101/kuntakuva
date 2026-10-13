@@ -1,4 +1,4 @@
-type SearchableMunicipality = { code: string; name: string };
+type SearchableMunicipality = { code: string; name: string; aliases?: string[] };
 
 function normalize(value: string) {
   return value.trim().toLocaleLowerCase("fi-FI").normalize("NFD").replace(/\p{M}/gu, "");
@@ -24,12 +24,19 @@ export function searchMunicipalities<T extends SearchableMunicipality>(items: T[
   if (needle.length > 80) return [];
   if (!needle) return items;
   return items.map((item) => {
-    const name = normalize(item.name);
-    const score = name === needle ? 0 : name.startsWith(needle) ? 1 : name.includes(needle) ? 2
-      : needle.length >= 3 ? 3 + distance(needle, name) : Infinity;
+    const score = Math.min(...[item.name, ...(item.aliases ?? [])].map((label) => {
+      const name = normalize(label);
+      return name === needle ? 0 : name.startsWith(needle) ? 1 : name.includes(needle) ? 2
+        : needle.length >= 3 ? 3 + distance(needle, name) : Infinity;
+    }));
     const threshold = needle.length >= 7 ? 2 : 1;
     return { item, score: score <= 2 || score <= 3 + threshold ? score : Infinity };
   }).filter(({ score }) => Number.isFinite(score))
     .sort((a, b) => a.score - b.score || a.item.name.localeCompare(b.item.name, "fi"))
     .map(({ item }) => item);
+}
+
+export function matchesMunicipalityName(item: SearchableMunicipality, query: string): boolean {
+  const needle = normalize(query);
+  return needle.length > 0 && [item.name, ...(item.aliases ?? [])].some((name) => normalize(name) === needle);
 }

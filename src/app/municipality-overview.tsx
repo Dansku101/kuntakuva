@@ -24,6 +24,7 @@ export default async function MunicipalityOverview({ code, name, year }: { code:
   const languages = [
     { label: "Suomenkieliset", value: values.finnish },
     { label: "Ruotsinkieliset", value: values.swedish },
+    { label: "Saamenkieliset", value: values.sami },
     { label: "Muut kielet kuin suomi, ruotsi ja saame", value: values.otherLanguages },
   ];
   const format = (value: number | null, unit: string) => value === null ? "Ei tietoa" : `${decimal.format(value)} ${unit}`;

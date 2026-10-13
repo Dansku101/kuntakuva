@@ -3,12 +3,12 @@
 import { LineChart, Table2 } from "lucide-react";
 import { useId, useState } from "react";
 
-type Point = { year: string; value: number | null };
+type Point = { year: string; value: number | null; breakBefore?: boolean };
 const format = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 });
 
-export default function TrendSeries({ title, points, note, source, sourceUrl, color, reference, unit = "%" }: {
+export default function TrendSeries({ title, points, note, source, sourceUrl, color, reference, unit = "%", breakNote }: {
   title: string; points: Point[]; note: string; source: string; sourceUrl: string;
-  color: string; reference?: number; unit?: string;
+  color: string; reference?: number; unit?: string; breakNote?: string;
 }) {
   const id = useId();
   const [view, setView] = useState<"chart" | "table">("chart");
@@ -29,7 +29,7 @@ export default function TrendSeries({ title, points, note, source, sourceUrl, co
   // Missing observations break the line instead of implying continuous data.
   for (let i = 0; i < points.length; i++) {
     const point = points[i];
-    if (point.value === null || (i > 0 && Number(point.year) - Number(points[i - 1].year) !== 1)) {
+    if (point.value === null || point.breakBefore || (i > 0 && Number(point.year) - Number(points[i - 1].year) !== 1)) {
       if (segment.length) segments.push(segment);
       segment = [];
     }
@@ -61,6 +61,7 @@ export default function TrendSeries({ title, points, note, source, sourceUrl, co
         {points.map((point) => point.value !== null && <circle key={point.year} cx={x(point.year)} cy={y(point.value)} r="4" fill={color}><title>{`${point.year}: ${format.format(point.value)} ${unit}`}</title></circle>)}
         {[...new Set([minYear, maxYear])].map((year) => <text key={year} x={x(String(year))} y="206" textAnchor="middle" className="axis-label">{year}</text>)}
       </svg>}
+    {breakNote && <p className="chart-footnote">{breakNote}</p>}
     <p className="chart-footnote">{note}</p>
     <a className="text-link history-source" href={sourceUrl} target="_blank" rel="noreferrer">{source}</a>
   </section>;

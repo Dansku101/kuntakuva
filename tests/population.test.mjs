@@ -5,13 +5,13 @@ import Module from "node:module";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import ts from "typescript";
-import { createElement } from "react";
+import { createElement, Suspense } from "react";
 import { renderToString } from "react-dom/server";
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 // Transpile in memory so tests need neither a new runner nor generated files.
-function loadTs(relativePath) {
+function loadTs(relativePath, overrides = {}) {
   const filename = path.resolve(testDirectory, "..", relativePath);
   const compiled = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021, jsx: ts.JsxEmit.ReactJSX },
@@ -21,10 +21,11 @@ function loadTs(relativePath) {
   loaded.paths = Module._nodeModulePaths(path.dirname(filename));
   const nativeRequire = loaded.require.bind(loaded);
   loaded.require = (specifier) => {
+    if (Object.hasOwn(overrides, specifier)) return overrides[specifier];
     const local = specifier.startsWith("@/") ? path.resolve(testDirectory, "../src", specifier.slice(2))
       : specifier.startsWith(".") ? path.resolve(path.dirname(filename), specifier) : null;
     if (local) for (const ext of [".ts", ".tsx"]) {
-      if (fs.existsSync(local + ext)) return loadTs(path.relative(path.resolve(testDirectory, ".."), local + ext));
+      if (fs.existsSync(local + ext)) return loadTs(path.relative(path.resolve(testDirectory, ".."), local + ext), overrides);
     }
     return nativeRequire(specifier);
   };
@@ -37,13 +38,131 @@ const { populationChange, populationCsv, relativePopulationPoints } = loadTs("sr
 const { accountsFields, parseAccountsFacts, selectAccountsDataset, getMunicipalityAccounts, expenseShares, perResidentAmount, depreciationCoverage, incomeStatementTotals } = loadTs("src/lib/finance.ts");
 const { parseEmployment, getEmploymentTrend } = loadTs("src/lib/employment.ts");
 const { fiveYearPopulationChange, percentagePointChange } = loadTs("src/lib/trends.ts");
-const { searchMunicipalities } = loadTs("src/lib/municipality-search.ts");
+const { searchMunicipalities, matchesMunicipalityName } = loadTs("src/lib/municipality-search.ts");
 const { GET: getMap } = loadTs("src/app/api/municipality-map/route.ts");
 const { default: TrendSeries } = loadTs("src/app/trend-series.tsx");
 const { parsePeopleCounts, getPeopleProfile, getEducationTrend, higherEducationShare } = loadTs("src/lib/people.ts");
 const { parseHeatingCounts, getHeatingProfile } = loadTs("src/lib/energy.ts");
 const { parseClimateProfile, parseClimateTrend, getClimateProfile } = loadTs("src/lib/climate.ts");
-const { commonProfiles, getComparison } = loadTs("src/lib/comparison.ts");
+const { commonProfiles, getComparison, getComparisonSections, loadComparisonSection } = loadTs("src/lib/comparison.ts");
+const { sameFinancialArea, compatibleFinancialPopulation } = loadTs("src/lib/financial-geography.ts");
+const { comparisonDifference } = loadTs("src/lib/comparison-difference.ts");
+
+test("financial geography blocks mergers and partial transfers but keeps unaffected municipalities", () => {
+  for (const code of ["KU507", "KU418", "KU837"]) {
+    assert.equal(compatibleFinancialPopulation(code, "2024", 7057), null);
+    assert.equal(compatibleFinancialPopulation(code, "2025", 7057), 7057);
+    assert.equal(sameFinancialArea(code, "2024", "2025"), false);
+  }
+  for (const code of ["KU740", "KU046"]) {
+    for (const year of ["2024", "2025"]) assert.equal(compatibleFinancialPopulation(code, year, 100), null);
+    assert.equal(sameFinancialArea(code, "2024", "2025"), true);
+  }
+  assert.equal(compatibleFinancialPopulation("KU235", "2024", 100), 100);
+  assert.equal(compatibleFinancialPopulation("KU235", "2024", null), null);
+  assert.equal(compatibleFinancialPopulation("KU235", "2026", 100), null);
+  assert.equal(sameFinancialArea("KU235", "unknown", "2025"), false);
+});
+
+test("finance display and comparison both suppress mismatched per-resident amounts", async () => {
+  const values = Object.fromEntries(Object.keys(accountsFields).map((key) => [key, 0]));
+  Object.assign(values, { taxRevenue: 20740000, operatingExpenses: 19750000, annualResult: 990000 });
+  const finance = { incomeStatementTotals, perResidentAmount, expenseShares,
+    getMunicipalityAccounts: async (_code, year) => ({ year, values, sourceUrl: "https://example.test/accounts" }) };
+  const { getComparisonGroup } = loadTs("src/lib/comparison.ts", { "./finance": finance,
+    "./statfin": { getPopulationSeries: async (_code, [year]) => ({ points: [{ year, population: 7057 }] }) } });
+  const group = await getComparisonGroup("finance", ["KU507", "KU235"], "2024");
+  assert.equal(group.failed, false);
+  assert.ok(group.rows.every((row) => row.values[0] === null && row.values[1] !== null));
+  const { default: Finance } = loadTs("src/app/municipality-finance.tsx", { "@/lib/finance": finance });
+  const html = renderToString(await Finance({ code: "KU507", name: "Mäntyharju", year: "2024", population: 7057 }));
+  assert.match(html, /Asukaskohtaisia lukuja ei näytetä/);
+  assert.match(html, /20,74 milj/);
+  assert.match(html, /19,75 milj/);
+  assert.doesNotMatch(html, /2[\s\u00a0]939/);
+});
+
+test("financial trend breaks retain both annual observations without joining different areas", () => {
+  const html = renderToString(createElement(TrendSeries, { title: "Finance", unit: "%",
+    points: [{ year: "2024", value: 20 }, { year: "2025", value: 30, breakBefore: true }],
+    note: "", breakNote: "Kuntaraja muuttunut", source: "KKNR", sourceUrl: "https://example.test", color: "#387c99" }));
+  assert.equal((html.match(/<polyline /g) ?? []).length, 2);
+  assert.equal((html.match(/<circle /g) ?? []).length, 2);
+  assert.match(html, /Kuntaraja muuttunut/);
+});
+
+test("overview withholds annual finance change across a merger but preserves current coverage", async () => {
+  const { default: Trends } = loadTs("src/app/municipality-trends.tsx", {
+    "@/lib/finance": { depreciationCoverage, getMunicipalityAccounts: async (_code, year) => ({ year,
+      values: { annualMargin: year === "2025" ? 200 : 100, depreciation: 100 } }) },
+    "@/lib/employment": { getEmploymentTrend: async () => [] },
+  });
+  const html = renderToString(await Trends({ year: "2025", series: { municipalityCode: "KU507", points: [] } }));
+  assert.match(html, /200 %/);
+  assert.match(html, /Kuntaraja muuttunut/);
+  assert.doesNotMatch(html, /prosenttiyks\. vuodessa/);
+  const unchanged = renderToString(await Trends({ year: "2025", series: { municipalityCode: "KU235", points: [] } }));
+  assert.match(unchanged, /\+100 prosenttiyks\. vuodessa/);
+});
+
+test("comparison differences use peer minus primary, percentage points and no invented zeros", () => {
+  const row = { label: "Test", year: "2025", unit: "%", values: [20, 30] };
+  assert.deepEqual(comparisonDifference(row), { value: 10, unit: "prosenttiyks." });
+  assert.equal(comparisonDifference({ ...row, values: [30, 20] }).value, -10);
+  for (const unit of ["€/asukas", "asukasta", "GWh", "kt CO₂e", "vuotta"]) {
+    assert.deepEqual(comparisonDifference({ ...row, unit, values: [0, 0] }), { value: 0, unit });
+  }
+  for (const change of [{ year: null }, { values: [null, 0] }, { values: [0, null] }, { values: [Infinity, 1] }]) {
+    assert.equal(comparisonDifference({ ...row, ...change }).value, null);
+  }
+});
+
+test("each comparison section has its own Suspense boundary and resolves before pending finance", async () => {
+  let releaseFinance;
+  const gate = new Promise((resolve) => { releaseFinance = resolve; });
+  let financeReady = false;
+  const sections = getComparisonSections(["KU499", "KU235"], "2025").map((section) => ({ ...section,
+    load: section.id === "finance" ? async () => { await gate; financeReady = true; return []; }
+      : async () => [{ label: "Ready", unit: "asukasta", year: "2025", values: [0, 10] }],
+  }));
+  const { default: Comparison } = loadTs("src/app/municipality-comparison.tsx", {
+    "@/lib/comparison": { getComparisonSections: () => sections, loadComparisonSection },
+  });
+  const tree = Comparison({ primary: { code: "KU499", name: "Mustasaari" }, peer: { code: "KU235", name: "Kauniainen" }, year: "2025" });
+  assert.equal(tree.props.children.length, 5);
+  assert.ok(tree.props.children.every((child) => child.type === Suspense));
+  const [population, , finance] = tree.props.children.map((child) => child.props.children);
+  const pendingFinance = finance.type(finance.props);
+  try {
+    const ready = await population.type(population.props);
+    assert.equal(ready.props.initialGroup.failed, false);
+    assert.equal(ready.props.initialGroup.rows[0].values[0], 0);
+    assert.equal(financeReady, false);
+  } finally { releaseFinance(); await pendingFinance; }
+});
+
+test("targeted comparison retry calls only the requested loader and rejects invalid input", async () => {
+  const calls = [];
+  const { GET } = loadTs("src/app/api/comparison/route.ts", {
+    "@/lib/comparison": { comparisonSectionIds: ["finance", "population"],
+      getComparisonGroup: async (...args) => { calls.push(args); return { failed: false, rows: [] }; } },
+  });
+  const response = await GET(new Request("https://example.test/api/comparison?section=finance&kunta=KU499&vertaa=KU235&vuosi=2025"));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(calls, [["finance", ["KU499", "KU235"], "2025"]]);
+  for (const query of ["section=bogus", "section=finance&kunta=KU499&vertaa=KU499&vuosi=2025", "section=finance&kunta=KU499&vertaa=KU235&vuosi=2026"]) {
+    assert.equal((await GET(new Request(`https://example.test/api/comparison?${query}`))).status, 400);
+  }
+  assert.equal(calls.length, 1);
+});
+
+test("failed comparison retries return a retryable status rather than empty success", async () => {
+  const { GET } = loadTs("src/app/api/comparison/route.ts", {
+    "@/lib/comparison": { comparisonSectionIds: ["finance"], getComparisonGroup: async () => ({ failed: true, rows: [] }) },
+  });
+  assert.equal((await GET(new Request("https://example.test/api/comparison?section=finance&kunta=KU499&vertaa=KU235&vuosi=2025"))).status, 503);
+});
 
 test("comparison aligns sparse publication years and never compares different years", async () => {
   const observations = { A: ["2020", "2022", "2025"], B: ["2020", "2023", "2026"] };
@@ -596,6 +715,28 @@ test("catalog keeps municipality codes, sorts Finnish names, and reads available
   });
 });
 
+test("official Swedish aliases are joined by code, not metadata order, and tolerate translation outages", async (t) => {
+  let offline = false;
+  t.mock.method(console, "warn", () => {});
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const swedish = url.includes("/sv/");
+    if (swedish && offline) throw new Error("offline");
+    return Response.json({ variables: [
+      { code: areaCode, values: swedish ? ["KU235", "KU499"] : ["KU499", "KU235"],
+        valueTexts: swedish ? ["Grankulla", "Korsholm"] : ["Mustasaari", "Kauniainen"] },
+      { code: yearCode, values: ["2025"], valueTexts: ["2025"] },
+    ] });
+  });
+  const { municipalities } = await getMunicipalityCatalog();
+  for (const [query, code] of [["korsholm", "KU499"], ["korshom", "KU499"], ["grankulla", "KU235"], ["kauniaien", "KU235"]]) {
+    assert.equal(searchMunicipalities(municipalities, query)[0].code, code);
+  }
+  assert.equal(matchesMunicipalityName(municipalities.find((m) => m.code === "KU499"), " KORSHOLM "), true);
+  assert.equal(matchesMunicipalityName(municipalities[0], ""), false);
+  offline = true;
+  assert.equal((await getMunicipalityCatalog()).municipalities.length, 2);
+});
+
 test("malformed catalog fails before mismatched names can be displayed", async (t) => {
   mockResponse(t, { variables: [{ code: areaCode, values: ["KU091"], valueTexts: [] }] });
   await assert.rejects(getMunicipalityCatalog(), /metadata is missing/);
@@ -638,15 +779,40 @@ test("demographic values follow returned metric indexes, preserving missing valu
   const codes = Object.values(demographicIndicators).reverse();
   const data = dataset({
     size: [1, codes.length, 1],
-    value: [3000, 20, 5, 75, 40, 20, 65, null],
+    value: [3000, 1000, 200, 10, 50, 740, 40, 20, 65, null],
   });
   data.dimension.contentscode = { category: { index: codes, label: Object.fromEntries(codes.map((code) => [code, code])) } };
   data.dimension[yearCode].category = { index: ["2025"], label: { "2025": "2025" } };
   mockResponse(t, data);
   const result = await getDemographicProfile("KU091", "2025");
   assert.deepEqual(result.values, { children: null, workingAge: 65, seniors: 20, averageAge: 40,
-    finnish: 75, swedish: 5, otherLanguages: 20, density: 3000 });
+    finnish: 74, swedish: 5, sami: 1, otherLanguages: 20, density: 3000 });
   assert.equal(result.year, "2025");
+});
+
+test("Utsjoki language counts include Sami, reconcile, and preserve absent or zero values", async (t) => {
+  const raw = { children: 10, workingAge: 60, seniors: 30, averageAge: 45, density: 0.5,
+    population: 1112, finnish: 597, swedish: 7, sami: 458, otherLanguages: 50 };
+  const codes = Object.values(demographicIndicators);
+  const data = dataset({ size: [1, codes.length, 1], value: Object.keys(demographicIndicators).map((key) => raw[key]) });
+  data.dimension.contentscode = { category: { index: codes, label: {} } };
+  data.dimension[areaCode].category = { index: ["KU890"], label: { KU890: "Utsjoki" } };
+  data.dimension[yearCode].category = { index: ["2025"], label: { "2025": "2025" } };
+  mockResponse(t, data);
+  const profile = await getDemographicProfile("KU890", "2025");
+  assert.equal(profile.values.sami, 458 / 1112 * 100);
+  assert.ok(Math.abs(["finnish", "swedish", "sami", "otherLanguages"].reduce((sum, key) => sum + profile.values[key], 0) - 100) < 1e-8);
+  const samiIndex = codes.indexOf(demographicIndicators.sami);
+  data.value[samiIndex] = null;
+  assert.equal((await getDemographicProfile("KU890", "2025")).values.sami, null);
+  data.value[samiIndex] = 0;
+  await assert.rejects(getDemographicProfile("KU890", "2025"), /reconcile/);
+  data.value[codes.indexOf(demographicIndicators.population)] = 654;
+  assert.equal((await getDemographicProfile("KU890", "2025")).values.sami, 0);
+  data.value = codes.map(() => 0);
+  assert.equal((await getDemographicProfile("KU890", "2025")).values.sami, null);
+  data.value[samiIndex] = 1.5;
+  await assert.rejects(getDemographicProfile("KU890", "2025"), /Invalid demographic/);
 });
 
 test("demographics reject extra regions rather than assigning their data to the municipality", async (t) => {
