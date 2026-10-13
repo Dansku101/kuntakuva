@@ -34,12 +34,252 @@ function loadTs(relativePath) {
 
 const { getMunicipalityCatalog, getPopulationSeries, getDemographicProfile, demographicIndicators } = loadTs("src/lib/statfin.ts");
 const { populationChange, populationCsv, relativePopulationPoints } = loadTs("src/lib/population.ts");
-const { accountsFields, parseAccountsFacts, selectAccountsDataset, getMunicipalityAccounts, expenseShares, perResidentAmount, depreciationCoverage } = loadTs("src/lib/finance.ts");
+const { accountsFields, parseAccountsFacts, selectAccountsDataset, getMunicipalityAccounts, expenseShares, perResidentAmount, depreciationCoverage, incomeStatementTotals } = loadTs("src/lib/finance.ts");
 const { parseEmployment, getEmploymentTrend } = loadTs("src/lib/employment.ts");
 const { fiveYearPopulationChange, percentagePointChange } = loadTs("src/lib/trends.ts");
 const { searchMunicipalities } = loadTs("src/lib/municipality-search.ts");
 const { GET: getMap } = loadTs("src/app/api/municipality-map/route.ts");
 const { default: TrendSeries } = loadTs("src/app/trend-series.tsx");
+const { parsePeopleCounts, getPeopleProfile, getEducationTrend, higherEducationShare } = loadTs("src/lib/people.ts");
+const { parseHeatingCounts, getHeatingProfile } = loadTs("src/lib/energy.ts");
+const { parseClimateProfile, parseClimateTrend, getClimateProfile } = loadTs("src/lib/climate.ts");
+const { commonProfiles, getComparison } = loadTs("src/lib/comparison.ts");
+
+test("comparison aligns sparse publication years and never compares different years", async () => {
+  const observations = { A: ["2020", "2022", "2025"], B: ["2020", "2023", "2026"] };
+  const calls = [];
+  const pair = await commonProfiles(async (code, cutoff) => {
+    calls.push([code, cutoff]);
+    const year = observations[code].filter((y) => y <= cutoff).at(-1);
+    return year ? { year, value: code === "A" ? 0 : null } : null;
+  }, ["A", "B"], "2025");
+  assert.deepEqual(pair, [{ year: "2020", value: 0 }, { year: "2020", value: null }]);
+  assert.ok(calls.every(([, y]) => y <= "2025"));
+  assert.equal(await commonProfiles(async () => null, ["A", "B"], "1990"), null);
+  await assert.rejects(commonProfiles(async () => ({ year: "2026" }), ["A", "B"], "2025"), /Invalid comparison year/);
+});
+
+test("comparison source outages remain isolated to their sections", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => { throw new Error("offline"); });
+  t.mock.method(console, "warn", () => {});
+  const groups = await getComparison(["KU499", "KU235"], "2023");
+  assert.equal(groups.length, 5);
+  assert.ok(groups.filter((g) => g.title !== "Talous").every((g) => g.failed));
+  const finance = groups.find((g) => g.title === "Talous");
+  assert.equal(finance.failed, false);
+  assert.ok(finance.rows.every((r) => r.year === null && r.values.every((v) => v === null)));
+});
+
+test("education history batches years and follows reversed year and category indexes", async (t) => {
+  const category = "koulutusaste_17_20180101";
+  const variables = [
+    { code: "alue_23_20260101", values: ["KU499"] },
+    { code: "timeperiod_y", values: ["2023", "2024", "2026"] },
+    { code: "sukupuoli_9_20180101", values: ["SSS"] },
+    { code: "ikaryhma_10_20180101", values: ["SSS"] },
+    { code: category, values: ["SSS", "9", "3", "4", "5", "6", "7", "8"] },
+    { code: "contentscode", values: ["vaesto_15_"] },
+  ];
+  let posts = 0;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    if (!options.body) return Response.json({ variables });
+    posts++;
+    const query = JSON.parse(options.body).query;
+    assert.deepEqual(query.find((q) => q.code === "timeperiod_y").selection.values, ["2023", "2024"]);
+    const ids = [category, "timeperiod_y", ...query.map((q) => q.code).filter((id) => ![category, "timeperiod_y"].includes(id))];
+    const categories = ["8", "7", "6", "5", "4", "3", "9", "SSS"];
+    const values = { "2023": [1, 2, 3, 4, 5, 35, 50, 100], "2024": [2, 4, 6, 8, 10, 40, 30, 100] };
+    return Response.json({ id: ids, size: [8, 2, 1, 1, 1, 1],
+      dimension: Object.fromEntries(ids.map((id) => [id, { category: { index: id === category ? categories : id === "timeperiod_y" ? ["2024", "2023"] : query.find((q) => q.code === id).selection.values } }])),
+      value: categories.flatMap((_, i) => [values["2024"][i], values["2023"][i]]) });
+  });
+  assert.deepEqual(await getEducationTrend("KU499", "2025"), [{ year: "2023", value: 10 }, { year: "2024", value: 20 }]);
+  assert.equal(posts, 1);
+});
+
+test("education shares preserve missing groups and zero denominators", () => {
+  assert.equal(higherEducationShare(null), null);
+  assert.equal(higherEducationShare({ total: 100, groups: [{ code: "5", count: 5 }] }), null);
+  assert.equal(higherEducationShare({ total: 0, groups: [] }), null);
+  assert.equal(higherEducationShare({ total: 100, groups: ["5", "6", "7", "8"].map((code) => ({ code, count: 0 })) }), 0);
+});
+
+test("trend SVGs use the requested unit and break at missing years", () => {
+  const html = renderToString(createElement(TrendSeries, { title: "Energy", unit: "GWh",
+    points: [{ year: "2020", value: 10 }, { year: "2022", value: 20 }, { year: "2023", value: null }],
+    note: "", source: "Syke", sourceUrl: "https://paastot.hiilineutraalisuomi.fi/", color: "#387c99" }));
+  assert.equal((html.match(/<polyline /g) ?? []).length, 2);
+  assert.ok(html.includes("<title>2022: 20 GWh</title>"));
+  assert.ok(!html.includes("20 %"));
+});
+
+const climateHeader = "vuosi;taso_3;taso_4;taso_5;hinku_laskenta;päästökauppa;kt;kt_tuuli;GWh";
+const climateCodes = ["Kul", "Säh", "Kau", "Ölj", "Muu", "Teo", "Työ", "Tie", "Rai", "Ves", "Maa", "Jät", "F-k"];
+function climateCsv(extra = [], replace = {}) {
+  return "\uFEFF" + [climateHeader,
+    ...climateCodes.map((sector) => replace[sector] ?? `2024;${sector};a;b;1;0;1,5;0;10`),
+    "2024;Tuu;Tuu;Tuu;1;0;0;-50;157,223", ...extra].join("\r\r\n");
+}
+
+test("climate history separates annual totals, excludes future and preliminary years", () => {
+  const csv = climateCsv([
+    ...climateCodes.map((code) => `2022;${code};a;b;1;0;2;999;20`),
+    "2022;Tuu;Tuu;Tuu;1;0;0;-10;0", "E2025;Tuu;Tuu;Tuu;1;0;0;-99;999",
+  ]);
+  const profiles = parseClimateTrend(csv, "2025");
+  assert.deepEqual(profiles.map((p) => [p.year, p.energy, p.emissions]), [["2022", 260, 26], ["2024", 130, 19.5]]);
+  assert.deepEqual(parseClimateTrend(csv, "2023").map((p) => p.year), ["2022"]);
+});
+
+test("climate totals exclude generation and emission credits and respect Hinku scope", () => {
+  const profile = parseClimateProfile(climateCsv(["2024;Kul;a;industrial;0;1;900;900;9000"]), "2025");
+  assert.equal(profile.year, "2024");
+  assert.equal(profile.energy, 130);
+  assert.equal(profile.emissions, 19.5);
+  assert.equal(profile.windGeneration, 157.223);
+  assert.ok(Math.abs(profile.sectors.reduce((sum, s) => sum + s.share, 0) - 100) < 1e-8);
+  assert.equal(parseClimateProfile(climateCsv(["E2025;Tuu;Tuu;Tuu;1;0;0;-99;999"]), "2025").year, "2024");
+  assert.equal(parseClimateProfile(climateCsv(), "2023"), null);
+});
+
+test("climate parsing preserves missing values and signed source corrections without inventing zeroes", () => {
+  const missing = parseClimateProfile(climateCsv([], { Kul: "2024;Kul;a;b;1;0;;0;" }), "2024");
+  assert.equal(missing.emissions, null);
+  assert.equal(missing.energy, null);
+  assert.equal(missing.sectors.find((s) => s.code === "Kul").energy, null);
+  const zero = parseClimateProfile(climateCsv([], { Kul: "2024;Kul;a;b;1;0;0;0;0" }), "2024");
+  assert.equal(zero.sectors.find((s) => s.code === "Kul").energy, 0);
+  const correction = parseClimateProfile(climateCsv([], { Kau: "2024;Kau;a;b;1;0;-0.001;-0.001;-0.014" }), "2024");
+  assert.equal(correction.sectors.find((s) => s.code === "Kau").energy, -0.014);
+  assert.ok(correction.sectors.every((s) => s.share === null));
+  const absent = parseClimateProfile([climateHeader, "2024;Tuu;Tuu;Tuu;1;0;0;0;0"].join("\n"), "2024");
+  assert.equal(absent.windGeneration, 0);
+  assert.equal(absent.energy, null);
+});
+
+test("climate rejects malformed columns, duplicate observations and invalid values", () => {
+  assert.throws(() => parseClimateProfile(climateCsv(["2024;Kul;a;b;1;0;1,5;0;10"]), "2024"), /Duplicate/);
+  assert.throws(() => parseClimateProfile(climateCsv().replace("kt_tuuli", "kt"), "2024"), /columns/);
+  assert.throws(() => parseClimateProfile(climateCsv([], { Kul: "2024;Kul;a;b;1;0;Infinity;0;10" }), "2024"), /observation/);
+  assert.throws(() => parseClimateProfile(climateCsv(["2024;unknown;a;b;1;0;0;0;0"]), "2024"), /category/);
+  assert.throws(() => parseClimateProfile(climateCsv(), "2024C12"), /year/);
+});
+
+test("climate fetch uses exact municipality codes and reports source failures", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    calls.push(url);
+    return String(url).endsWith("kunta_235.csv") ? new Response(climateCsv()) : new Response("", { status: 404 });
+  });
+  assert.equal((await getClimateProfile("KU235", "2025")).year, "2024");
+  assert.equal(await getClimateProfile("KU005", "2025"), null);
+  assert.ok(calls[1].endsWith("/kunta_5.csv"));
+  await assert.rejects(getClimateProfile("KU../", "2025"), /Invalid/);
+  t.mock.method(globalThis, "fetch", async () => new Response("", { status: 503 }));
+  await assert.rejects(getClimateProfile("KU235", "2025"), /503/);
+});
+
+function heatingFixture() {
+  const selections = { alue_23_20260101: ["KU499"], timeperiod_y: ["2025"], rakennus_6_20180101: ["SSS"],
+    rak_valm_v_10_20210101: ["SSS"], polttoaineet_12_20260101: ["SSS", "01", "02_03_05", "04", "06", "07_08", "09", "99"],
+    contentscode: ["rakennus_lkm"] };
+  const counts = { SSS: 12278, "01": 164, "02_03_05": 2172, "04": 3395, "06": 30, "07_08": 3664, "09": 996, "99": 1857 };
+  const id = Object.keys(selections).reverse();
+  const categories = [...selections.polttoaineet_12_20260101].reverse();
+  const dimension = Object.fromEntries(id.map((key) => [key, { category: { index: key.startsWith("polttoaineet") ? categories : selections[key] } }]));
+  return { selections, data: { id, size: id.map((key) => selections[key].length), dimension, value: categories.map((key) => counts[key]) } };
+}
+
+test("heating counts follow returned indexes and preserve unknown and missing values", () => {
+  const { selections, data } = heatingFixture();
+  const counts = parseHeatingCounts(data, selections);
+  assert.equal(counts.SSS, 12278);
+  assert.equal(counts["99"], 1857);
+  assert.equal(counts["04"], 3395);
+  assert.equal(parseHeatingCounts({ ...data, value: [null, ...data.value.slice(1)] }, selections)["99"], null);
+  assert.throws(() => parseHeatingCounts({ ...data, value: [1858, ...data.value.slice(1)] }, selections), /reconcile/);
+  assert.throws(() => parseHeatingCounts({ ...data, value: [-1, ...data.value.slice(1)] }, selections), /Invalid building/);
+  assert.throws(() => parseHeatingCounts({ ...data, dimension: { ...data.dimension, alue_23_20260101: { category: { index: ["KU091"] } } } }, selections), /index/);
+});
+
+test("heating requests building counts for the selected municipality and never a future year", async (t) => {
+  const { selections, data } = heatingFixture();
+  let posts = 0;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    if (!options.body) return Response.json({ variables: Object.entries(selections).map(([code, values]) => ({ code, values })) });
+    posts++;
+    const query = JSON.parse(options.body).query;
+    assert.deepEqual(Object.fromEntries(query.map((v) => [v.code, v.selection.values])), selections);
+    return Response.json(data);
+  });
+  assert.equal(await getHeatingProfile("KU499", "2024"), null);
+  assert.equal(posts, 0);
+  const profile = await getHeatingProfile("KU499", "2025");
+  assert.equal(profile.year, "2025");
+  assert.equal(profile.total, 12278);
+  assert.equal(profile.groups.find((g) => g.code === "09").share, 996 / 12278 * 100);
+  await assert.rejects(getHeatingProfile("KU../", "2025"), /Invalid/);
+});
+
+test("income statement totals reconcile Mustasaari actuals without counting investment or own work as income", () => {
+  const values = { ...parseAccountsFacts(accountsFacts(), "0203026-2", "2025"),
+    operatingRevenue: 19810812.35, taxRevenue: 51218513.53, stateTransfers: 21854570,
+    interestIncome: 164422.42, otherFinancialIncome: 65581.91, extraordinaryIncome: 0,
+    operatingExpenses: 82131787.52, interestExpenses: 2686543.82, otherFinancialExpenses: 6.5,
+    depreciation: 10264133.15, extraordinaryExpenses: 0, ownWorkCapitalized: 537786.06,
+    annualResult: -1430784.72 };
+  const totals = incomeStatementTotals(values);
+  assert.equal(totals.reconciled, true);
+  assert.ok(Math.abs(totals.income - 93113900.21) < 0.01);
+  assert.ok(Math.abs(totals.expenses - 95082470.99) < 0.01);
+  assert.deepEqual(incomeStatementTotals({ ...values, investments: 1e9, surplus: 0 }), totals);
+  for (const change of [{ extraordinaryIncome: null }, { interestExpenses: Infinity }, { annualResult: -1 }, { ownWorkCapitalized: null }]) {
+    assert.deepEqual(incomeStatementTotals({ ...values, ...change }), { income: null, expenses: null, reconciled: false });
+  }
+  const zero = Object.fromEntries(Object.keys(accountsFields).map((key) => [key, 0]));
+  assert.deepEqual(incomeStatementTotals(zero), { income: 0, expenses: 0, reconciled: true });
+  assert.deepEqual(incomeStatementTotals({ ...zero, stateTransfers: -100, annualResult: -100 }), { income: -100, expenses: 0, reconciled: true });
+});
+
+test("resident counts use returned indexes, reconcile totals and preserve missing data", () => {
+  const selections = { area: ["KU499"], year: ["2025"], age: ["018", "019"], status: ["SSS", "1", "2"] };
+  const data = { id: ["status", "year", "area", "age"], size: [3, 1, 1, 2],
+    dimension: { status: { category: { index: ["2", "SSS", "1"] } }, year: { category: { index: { "2025": 0 } } },
+      area: { category: { index: ["KU499"] } }, age: { category: { index: ["019", "018"] } } },
+    value: [30, 40, 40, 60, 10, 20] };
+  assert.deepEqual(parsePeopleCounts(data, selections, "status"), { SSS: 100, "1": 30, "2": 70 });
+  assert.equal(parsePeopleCounts({ ...data, value: [30, 40, 40, 60, null, 20] }, selections, "status")["1"], null);
+  assert.throws(() => parsePeopleCounts({ ...data, value: [30, 40, 40, 60, 10, 21] }, selections, "status"), /reconcile/);
+  assert.throws(() => parsePeopleCounts({ ...data, value: [30, 40, 40, 60, -1, 20] }, selections, "status"), /Invalid resident count/);
+  assert.throws(() => parsePeopleCounts({ ...data, dimension: { ...data.dimension, area: { category: { index: ["KU091"] } } } }, selections, "status"), /index/);
+});
+
+test("marital profile includes adults only and selects a published year no later than selection", async (t) => {
+  const variables = [
+    { code: "alue_23_20260101", values: ["KU499"] }, { code: "timeperiod_y", values: ["2023", "2024", "2026"] },
+    { code: "sukupuoli_9_20180101", values: ["SSS"] },
+    { code: "ikaryhma_10_20180101", values: [...Array.from({length:100}, (_,i) => String(i).padStart(3,"0")), "100-", "SSS"] },
+    { code: "siviilisaaty_16_20190101", values: ["SSS", "1", "2", "4", "5"] },
+    { code: "contentscode", values: ["vaerak-vaesto"] }, { code: "kieli_15_20180102", values: ["SSS"] },
+  ];
+  let query;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    if (!options?.body) return Response.json({variables});
+    query = JSON.parse(options.body).query;
+    const ids = query.map((item) => item.code);
+    const size = query.map((item) => item.selection.values.length);
+    const value = [];
+    for (let age = 0; age < 83; age++) value.push(10, 2, 6, 1, 1);
+    return Response.json({id:ids, size, dimension:Object.fromEntries(query.map((item) => [item.code, {category:{index:item.selection.values}}])), value});
+  });
+  const result = await getPeopleProfile("marital", "KU499", "2025");
+  assert.equal(result.year, "2024");
+  assert.equal(result.total, 830);
+  assert.equal(result.groups.find((group) => group.code === "2").share, 60);
+  const ages = query.find((item) => item.code.startsWith("ikaryhma")).selection.values;
+  assert.equal(ages.length, 83);
+  assert.ok(ages.includes("018") && ages.includes("100-") && !ages.includes("017") && !ages.includes("SSS"));
+});
 
 test("trend chart server rendering preserves SVG tooltip text without React errors", (context) => {
   const errors = [];
@@ -165,6 +405,9 @@ test("audited field IDs remain pinned to the official statement aggregates", () 
     stateTransfers: "3530963", personnel: "1562", services: "699", materials: "683",
     grants: "3432179", otherExpenses: "3446291", annualResult: "159456", surplus: "1447",
     annualMargin: "1400", depreciation: "1470", investments: "1374",
+    interestIncome: "973", otherFinancialIncome: "925", interestExpenses: "556",
+    otherFinancialExpenses: "574", extraordinaryIncome: "1117", extraordinaryExpenses: "1101",
+    ownWorkCapitalized: "1599",
   });
 });
 
@@ -493,6 +736,12 @@ test("Overpass HTTP-200 timeouts are never fetch-cached; concurrent requests sha
     }] });
     overpassCalls++;
     assert.equal(options.cache, "no-store");
+    assert.equal(options.body, undefined);
+    assert.equal(options.method ?? "GET", "GET");
+    const query = new URL(String(url)).searchParams.get("data");
+    assert.ok(query.includes("[bbox:60,24,61,25]"));
+    assert.ok(query.includes("[maxsize:67108864]"));
+    assert.equal(options.headers.Accept, "application/json");
     await gate;
     return Response.json(String(url).includes("private.coffee") ? { elements: [], remark: "runtime error: timeout" }
       : { elements: [{ type: "node", id: 1, lat: 60.5, lon: 24.5,

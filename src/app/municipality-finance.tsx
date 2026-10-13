@@ -1,5 +1,5 @@
 import { ExternalLink } from "lucide-react";
-import { expenseShares, getMunicipalityAccounts, perResidentAmount } from "@/lib/finance";
+import { expenseShares, getMunicipalityAccounts, incomeStatementTotals, perResidentAmount } from "@/lib/finance";
 
 const euros = new Intl.NumberFormat("fi-FI", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const millions = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 2 });
@@ -19,6 +19,7 @@ export default async function MunicipalityFinance({ code, name, year, population
   </section>;
   const v = accounts.values;
   const shares = expenseShares(v);
+  const totals = incomeStatementTotals(v);
   const expenses = [
     { label: "Henkilöstökulut", value: v.personnel },
     { label: "Palvelujen ostot", value: v.services },
@@ -30,6 +31,15 @@ export default async function MunicipalityFinance({ code, name, year, population
     { label: "Toimintatuotot", value: v.operatingRevenue },
     { label: "Verotulot", value: v.taxRevenue },
     { label: "Valtionosuudet", value: v.stateTransfers },
+    { label: "Korkotuotot", value: v.interestIncome },
+    { label: "Muut rahoitustuotot", value: v.otherFinancialIncome },
+    { label: "Satunnaiset tuotot", value: v.extraordinaryIncome },
+  ];
+  const result: { label: string; value: number | null }[] = [
+    { label: "Valmistus omaan käyttöön", value: v.ownWorkCapitalized },
+    { label: "Korkokulut", value: v.interestExpenses },
+    { label: "Muut rahoituskulut", value: v.otherFinancialExpenses },
+    { label: "Satunnaiset kulut", value: v.extraordinaryExpenses },
     { label: "Vuosikate", value: v.annualMargin },
     { label: "Poistot ja arvonalentumiset", value: v.depreciation },
     { label: "Tilikauden tulos ennen siirtoja", value: v.annualResult },
@@ -40,9 +50,14 @@ export default async function MunicipalityFinance({ code, name, year, population
       <a className="text-link" href={accounts.sourceUrl} target="_blank" rel="noreferrer">Valtiokonttori<ExternalLink size={14} aria-hidden="true" /><span className="sr-only"> (avautuu uuteen välilehteen)</span></a>
     </div>
     <dl className="finance-totals">
-      <div><dt>Toimintakulut</dt><dd title={money(v.operatingExpenses)}>{compact(v.operatingExpenses)}</dd><dd className="finance-detail">{money(perResidentAmount(v.operatingExpenses, population))} / asukas · ei investointeja tai poistoja</dd></div>
-      <div><dt>Investoinnit</dt><dd title={money(v.investments)}>{compact(v.investments)}</dd><dd className="finance-detail">Toteutuneet bruttoinvestoinnit</dd></div>
+      <div><dt>Tulot yhteensä</dt><dd title={money(totals.income)}>{compact(totals.income)}</dd><dd className="finance-detail">{money(perResidentAmount(totals.income, population))} / asukas · tuloslaskelman tulot</dd></div>
+      <div><dt>Kulut yhteensä</dt><dd title={money(totals.expenses)}>{compact(totals.expenses)}</dd><dd className="finance-detail">{money(perResidentAmount(totals.expenses, population))} / asukas · sisältää poistot ja rahoituskulut</dd></div>
       <div><dt>{v.surplus === null ? "Tilikauden ylijäämä / alijäämä" : v.surplus < 0 ? "Tilikauden alijäämä" : "Tilikauden ylijäämä"}</dt><dd className={v.surplus === null ? "" : v.surplus < 0 ? "negative" : "positive"} title={money(v.surplus)}>{compact(v.surplus)}</dd><dd className="finance-detail">Tilinpäätössiirtojen jälkeen · ei budjetin ylitys</dd></div>
+    </dl>
+    <p className="overview-note finance-note">Tulot ja kulut ovat tuloslaskelmasta. Investoinnit, lainojen nostot ja lyhennykset eivät sisälly näihin summiin. Valmistus omaan käyttöön ja tilinpäätössiirrot vaikuttavat lisäksi ylijäämään.{!totals.reconciled && " Yhteissummia ei näytetä: erittely on puutteellinen tai ei täsmää tilikauden tulokseen."}</p>
+    <dl className="finance-context">
+      <div><dt>Toimintakulut</dt><dd>{compact(v.operatingExpenses)}</dd></div>
+      <div><dt>Investoinnit erikseen</dt><dd>{compact(v.investments)}<small>Toteutuneet bruttoinvestoinnit</small></dd></div>
     </dl>
     <details className="data-disclosure">
       <summary>Menot ja tulot tarkemmin</summary>
@@ -53,8 +68,12 @@ export default async function MunicipalityFinance({ code, name, year, population
         </div>)}</dl>
           <p className="overview-note finance-note">Menolajit eivät ole palvelukohtainen jakauma.{!shares && " Prosenttiosuuksia ei esitetä: menolajit eivät ole täydelliset tai täsmää yhteissummaan."}</p>
         </div>
-        <div><h3>Tulot ja tuloksen muodostuminen</h3><dl className="finance-secondary">
+        <div><h3>Tulot</h3><dl className="finance-secondary">
           {income.map(({ label, value }) => <div key={label}><dt>{label}</dt><dd>{money(value)}</dd></div>)}
+          <div className="finance-sum"><dt>Tulot yhteensä</dt><dd>{money(totals.income)}</dd></div>
+        </dl><h3 className="finance-result-heading">Muut kulut ja tuloksen muodostuminen</h3><dl className="finance-secondary">
+          {result.map(({ label, value }) => <div key={label}><dt>{label}</dt><dd>{money(value)}</dd></div>)}
+          <div className="finance-sum"><dt>Kulut yhteensä</dt><dd>{money(totals.expenses)}</dd></div>
         </dl></div>
       </div>
       <p className="overview-note finance-note">Kunta liikelaitoksineen, sisäiset erät poistettu. Asukaskohtainen luku käyttää Tilastokeskuksen vuoden {year} lopun väkilukua. Alijäämä on tilikauden saldo, ei talousarvion ylitys; ylitystä ei lasketa ilman vertailukelpoista budjettia.</p>

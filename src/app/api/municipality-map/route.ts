@@ -21,7 +21,7 @@ type OverpassResponse = { elements?: OverpassElement[]; remark?: string };
 const BOUNDARY_URL = "https://geo.stat.fi/geoserver/tilastointialueet/wfs";
 const OVERPASS_URLS = ["https://overpass.private.coffee/api/interpreter", "https://overpass-api.de/api/interpreter"];
 const overpassCache = new Map<string, { expires: number; pending: Promise<OverpassResponse> }>();
-const APP_USER_AGENT = "Kuntakuva/0.1 municipality explorer";
+const APP_USER_AGENT = "Kuntakuva/0.1 (+https://github.com/Dansku101/kuntakuva)";
 const PLACE_TYPES = new Set(["museum", "library", "attraction", "gallery", "viewpoint", "historic", "park"]);
 
 function json(data: unknown, init?: ResponseInit) {
@@ -184,7 +184,7 @@ function fetchOverpassData(bbox: number[]) {
 async function requestOverpassData(bbox: number[]) {
   const [west, south, east, north] = bbox;
   const query = `
-    [out:json][timeout:15][bbox:${south},${west},${north},${east}];
+    [out:json][timeout:25][maxsize:67108864][bbox:${south},${west},${north},${east}];
     (
       node["place"~"^(city|town|village|hamlet|suburb|neighbourhood)$"];
       node["amenity"="library"];
@@ -203,21 +203,19 @@ async function requestOverpassData(bbox: number[]) {
     out center tags;
   `;
   const options: RequestInit = {
-    method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
       "User-Agent": APP_USER_AGENT,
+      Accept: "application/json",
     },
-    body: new URLSearchParams({ data: query }),
     // HTTP 200 can contain a timeout remark. Cache only validated successes above.
     cache: "no-store",
   };
   let lastError: unknown;
   for (const url of OVERPASS_URLS) {
     try {
-      const response = await fetch(url, {
+      const response = await fetch(`${url}?${new URLSearchParams({ data: query })}`, {
         ...options,
-        signal: AbortSignal.timeout(18_000),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
         await response.body?.cancel();

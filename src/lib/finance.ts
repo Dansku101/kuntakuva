@@ -13,6 +13,9 @@ export const accountsFields = {
   stateTransfers: "3530963", personnel: "1562", services: "699", materials: "683",
   grants: "3432179", otherExpenses: "3446291", annualResult: "159456", surplus: "1447",
   annualMargin: "1400", depreciation: "1470", investments: "1374",
+  interestIncome: "973", otherFinancialIncome: "925", interestExpenses: "556",
+  otherFinancialExpenses: "574", extraordinaryIncome: "1117", extraordinaryExpenses: "1101",
+  ownWorkCapitalized: "1599",
 } as const;
 export type AccountsValues = Record<keyof typeof accountsFields, number | null>;
 const verifiedTaxonomies: Record<string, string> = {
@@ -26,6 +29,20 @@ type AccountsFact = {
   ytunnus: string; raportointikausi: string; raportointikokonaisuus: string;
   osakokonaisuus: string; taksonomia: string; tunnusluku: string; arvo: string | null;
 };
+
+export function incomeStatementTotals(values: AccountsValues) {
+  const sum = (parts: (number | null)[]) => parts.some((value) => value === null || !Number.isFinite(value))
+    ? null : parts.reduce<number>((total, value) => total + value!, 0);
+  const income = sum([values.operatingRevenue, values.taxRevenue, values.stateTransfers,
+    values.interestIncome, values.otherFinancialIncome, values.extraordinaryIncome]);
+  const expenses = sum([values.operatingExpenses, values.interestExpenses,
+    values.otherFinancialExpenses, values.depreciation, values.extraordinaryExpenses]);
+  // Capitalized own work is a separate accounting adjustment, not external income.
+  const result = sum([income, expenses === null ? null : -expenses, values.ownWorkCapitalized]);
+  const reconciled = result !== null && values.annualResult !== null &&
+    Number.isFinite(values.annualResult) && Math.abs(result - values.annualResult) <= 0.05;
+  return { income: reconciled ? income : null, expenses: reconciled ? expenses : null, reconciled };
+}
 
 export function expenseShares(values: AccountsValues): number[] | null {
   const parts = [values.personnel, values.services, values.materials, values.grants, values.otherExpenses];

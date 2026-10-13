@@ -6,10 +6,11 @@ over time using Statistics Finland's public data.
 
 ## Project status
 
-The dashboard has four separate URL-backed views: Overview (`yleiskuva`),
-Trends (`trendit`), Map (`kartta`) and Statistics (`tilastot`). Municipality and
-year selection preserve the active view. Overview holds the headline indicators;
-Trends holds time series; Statistics holds demographics and actual accounts.
+The dashboard has five separate URL-backed views: Overview (`yleiskuva`),
+Trends (`trendit`), Comparison (`vertailu`), Map (`kartta`) and Statistics (`tilastot`).
+Municipality and year selection preserve the active view and comparison peer.
+Overview holds headline indicators and three short topic summaries;
+Trends holds time series; Statistics holds all detailed distributions and accounts.
 The map uses Statistics Finland's code-matched 2026 municipal boundaries and
 OSM places. See [the October 2026 audit](docs/audit-2026-10-12.md) for findings,
 source verification, testing, product decisions and remaining limitations.
@@ -17,12 +18,35 @@ source verification, testing, product decisions and remaining limitations.
 The population dashboard includes municipality search, available-year selection,
 population trends, a 5/10/20-observation chart, an accessible data table,
 and CSV export. The responsive interface includes loading and retry states.
-The municipality overview includes age structure, languages, density and average
-age. The interface focuses on one municipality; old `vertaa` URL parameters are
-ignored. A compact direction profile covers population, unemployment and financial
+Statistics includes age structure, languages, density and average age.
+A compact direction profile covers population, unemployment and financial
 coverage. A Treasury actual-accounts section shows operating spending, investments
 and annual surplus/deficit, with expandable expenses and revenue sources.
 No budget plans or forecasts are displayed as actual data.
+
+Overview and Statistics also include registered building heating sources.
+Statistics displays building counts and shares for every source category;
+Overview shows only the leading heating group and links to Statistics.
+Energy sections appear in this order: heating, local wind generation, then energy
+consumption and emissions. Sector tables remain in Statistics.
+
+### Municipality Comparison And Trends
+
+Comparison has a separate typo-tolerant peer search and shareable `vertaa=KUxxx`
+parameter. Duplicate or invalid peers are ignored; swap and remove controls are
+available. Each metric uses the latest common observation year at or before the
+selection. Categories include demographics, education, actual finances, heating,
+energy and emissions. Finance uses same-year population denominators; climate
+figures remain explicitly labelled totals. Missing data never becomes zero and a
+failed source does not suppress other sections. Regional-boundary caveats remain
+visible, especially for per-resident finance figures and municipality mergers.
+
+Trends adds ten published education observations via one batched JSON-stat query,
+resolving returned year and category indexes separately. Energy and emissions use
+up to twenty final Syke observations; preliminary years are excluded. Charts and
+tables use explicit units, and lines break at missing observations or skipped
+years. Heating has no trend line: the current table only covers 2025 and archival
+tables have different coverage. No synthetic history is created.
 
 ## MVP
 
@@ -135,6 +159,18 @@ Amounts are euros. Signs are preserved, absent values remain null, and duplicate
 facts or incompatible reporting scopes fail closed. Expense shares require all
 five nonnegative categories to reconcile to operating expenses within EUR 0.05.
 
+Income-statement income totals operating revenue, taxes, state transfers,
+interest income (973), other financial income (925) and extraordinary income
+(1117). Expense totals include operating expenses, interest expenses (556),
+other financial expenses (574), depreciation/impairments and extraordinary
+expenses (1101). Capitalized own work (1599) is an accounting adjustment, not
+external income. Both totals are shown only when income minus expenses plus
+capitalized own work reconciles to the reported annual result within EUR 0.05.
+Investments, borrowing and loan repayments are outside these totals.
+The additional field IDs were checked in the official KKNR k-t07 x01 column
+of the [2023-06-21 and 2024-06-13 reporting templates](https://www.avoindata.fi/data/fi/dataset/sbr-taksonomia).
+Live 2024/2025 totals were reconciled for Mustasaari, Kauniainen and Espoo.
+
 ### Published Accounts Reconciliation
 
 The field mappings were checked against both municipalities' published 2025
@@ -161,6 +197,49 @@ verified. Detailed expenses, income, report status and interpretation are
 expandable to keep the main overview compact.
 
 ## Documentation
+
+### Building Heating Sources
+
+Heating uses [Statistics Finland table 15er](https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/raku/15er.px/),
+currently covering 2025 with the 2026 regional classification. Requests select
+all building types and construction years, the chosen municipality, and building
+counts (`rakennus_lkm`). The latest observation at or before the selected year is
+used; earlier selections show unavailable data, never a future observation.
+Returned dimension indexes and category totals are validated. Unknown heating
+sources remain a separate category and missing observations stay null.
+
+These are shares of registered buildings, not energy consumption, floor area,
+dwellings or only municipality-owned buildings. Holiday residences are included;
+the source excludes categories such as agricultural, sauna and outbuildings.
+Changes of heating source may not reach the register. Oil/gas and wood/peat are
+combined in the source and are not split or relabelled as renewable energy.
+
+### Electricity Production, Energy Use And Emissions
+
+[Syke's public emissions service](https://paastot.hiilineutraalisuomi.fi/)
+publishes municipality-code-specific CSV files under
+`Tulokset_taso_5/kunta_<numeric code>.csv`. The server caches them for one day
+and uses the latest final year at or before the selection, currently 2024.
+`E`-prefixed preliminary years are excluded. CSV parsing uses `csv-parse` with
+validated headers, categories and unique observation keys. Missing observations
+remain null; signed source corrections are preserved.
+
+The production section currently covers **wind only** (`Tuu.GWh`). Solar, hydro,
+nuclear and other production are not inferred from regional or national figures.
+The wind-production row is excluded from consumption totals. Energy and emissions
+use the Hinku subset (`hinku_laskenta=1`) and uncredited `kt`, never `kt_tuuli`.
+Units are GWh and kilotonnes CO2-equivalent. Missing sectors suppress totals
+rather than silently contributing zero.
+
+The [Hinku scope](https://hiilineutraalisuomi.syke.fi/paastotieto/paastotiedot-ja-indikaattorit/kuntien-kayttoperaiset-paastot-ja-ilmastoindikaattorit/)
+excludes industrial electricity, ETS industrial fuels, industrial waste treatment,
+and pass-through truck, van and bus traffic. Land-use emissions and sinks are
+outside this calculation. These are not a municipality's complete carbon footprint
+or an estimate of its electricity self-sufficiency.
+
+Verified Mustasaari 2024 source totals: wind 157.223 GWh, Hinku energy consumption
+560.799 GWh, and uncredited Hinku emissions 103.831 kt CO2-equivalent. Live parsing
+was also checked for Kauniainen and Helsinki.
 
 The initial product scope and technical direction are recorded in
 [`docs/project-brief.md`](docs/project-brief.md).
