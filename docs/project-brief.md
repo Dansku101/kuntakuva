@@ -26,11 +26,13 @@ core statistics experience works reliably.
 
 ## Status
 
-The population dashboard is implemented: municipality search, year selection,
-population trends, annual changes, CSV export, and responsive loading/error states.
-Age structure, language distribution, employment trends and verified 2024–2025
-municipal accounts are implemented. Overview, Trends, Map and Statistics are
-separate views sharing municipality and year selection. The map uses code-matched
-Statistics Finland boundaries and OSM place data. The next priorities are two-
-municipality comparison, age-structure trends and saved municipalities; see
-[the product and engineering audit](audit-2026-10-12.md).
+The dashboard includes municipality search, year selection, population trends,
+annual changes, CSV export, demographics, education, employment, heating,
+climate data and verified 2024–2025 accounts. Overview, Trends, Comparison, Map
+and Statistics share municipality and year selection.
+
+The map deliberately stays simple: a code-matched Statistics Finland boundary,
+an OpenStreetMap basemap and an optional population grid. Separate OSM names,
+place markers and place lists have been removed, along with live Overpass queries.
+This is a small passion project; dependable existing views take priority over
+expanding its scope. See [the reliability follow-up](performance-2026-10-17.md).

@@ -1,6 +1,8 @@
 import { GraduationCap, Heart } from "lucide-react";
 import { getPeopleProfile, type PeopleProfile } from "@/lib/people";
 
+import { Suspense } from "react";
+
 const integer = new Intl.NumberFormat("fi-FI");
 const decimal = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 });
 
@@ -8,7 +10,7 @@ function Distribution({ title, profile, year, note, href, icon, failed }: {
   title: string; profile: PeopleProfile | null; year: string; note: string; href: string; icon: React.ReactNode; failed: boolean;
 }) {
   return <section className="people-distribution" aria-label={title}>
-    <div className="section-heading"><h3>{icon}{title}</h3><span className="profile-caption">{profile?.year ?? year}{profile && profile.year !== year ? " · uusin saatavilla" : ""}</span></div>
+    <div className="section-heading"><h3>{icon}{title}</h3><span className="profile-caption">{profile ? `Havaintovuosi ${profile.year}${profile.year !== year ? " · uusin saatavilla" : ""}` : `Valittu vuosi ${year}`}</span></div>
     {profile ? <>
       <p className="people-base">{profile.total === null ? "Kokonaismäärä puuttuu" : `${integer.format(profile.total)} asukasta`} · {title === "Koulutus" ? "15 vuotta täyttäneet" : "18 vuotta täyttäneet"}</p>
       <table className="people-table"><caption className="sr-only">{title}, henkilömäärät ja osuudet</caption>
@@ -38,19 +40,34 @@ function compactEducation(profile: PeopleProfile | null): PeopleProfile | null {
   }) };
 }
 
-export default async function MunicipalityPeople({ code, year, compact = false }: { code: string; year: string; compact?: boolean }) {
-  const [education, marital] = await Promise.allSettled([getPeopleProfile("education", code, year), getPeopleProfile("marital", code, year)]);
+export async function ResidentDistribution({ kind, code, year, compact = false }: {
+  kind: "education" | "marital"; code: string; year: string; compact?: boolean;
+}) {
+  let profile: PeopleProfile | null = null;
+  let failed = false;
+  try { profile = await getPeopleProfile(kind, code, year); }
+  catch { failed = true; }
+  return kind === "education" ? <Distribution title="Koulutus" year={year}
+    icon={<GraduationCap size={18} aria-hidden="true" />} failed={failed}
+    profile={compact ? compactEducation(profile) : profile}
+    note="Korkein suoritettu tutkinto, osuus 15 vuotta täyttäneistä. Ei perusasteen jälkeistä tutkintoa ei tarkoita, ettei henkilö olisi käynyt koulua. Aluejako 2026."
+    href="https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vkour/12bq.px/" />
+    : <Distribution title="Siviilisääty" year={year} icon={<Heart size={18} aria-hidden="true" />}
+      failed={failed} profile={profile}
+      note="Osuus 18 vuotta täyttäneistä. Naimaton ei tarkoita samaa kuin sinkku: avoliitto ei näy siviilisäädyssä. Rekisteröidyt parisuhteet sisältyvät vastaaviin luokkiin. Aluejako 2026."
+      href="https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vaerak/11rz.px/" />;
+}
+
+export default function MunicipalityPeople({ code, year, compact = false }: { code: string; year: string; compact?: boolean }) {
   return <section className="people-section" aria-labelledby="people-heading">
     <p className="eyebrow">ASUKKAAT</p><h2 id="people-heading">Koulutus ja siviilisääty</h2>
     <div className="people-grid">
-      <Distribution title="Koulutus" year={year} icon={<GraduationCap size={18} aria-hidden="true" />} failed={education.status === "rejected"}
-        profile={education.status === "fulfilled" ? compact ? compactEducation(education.value) : education.value : null}
-        note="Korkein suoritettu tutkinto, osuus 15 vuotta täyttäneistä. Ei perusasteen jälkeistä tutkintoa ei tarkoita, ettei henkilö olisi käynyt koulua. Aluejako 2026."
-        href="https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vkour/12bq.px/" />
-      <Distribution title="Siviilisääty" year={year} icon={<Heart size={18} aria-hidden="true" />} failed={marital.status === "rejected"}
-        profile={marital.status === "fulfilled" ? marital.value : null}
-        note="Osuus 18 vuotta täyttäneistä. Naimaton ei tarkoita samaa kuin sinkku: avoliitto ei näy siviilisäädyssä. Rekisteröidyt parisuhteet sisältyvät vastaaviin luokkiin. Aluejako 2026."
-        href="https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vaerak/11rz.px/" />
+      <Suspense fallback={<p className="history-loading" role="status">Haetaan koulutustietoja…</p>}>
+        <ResidentDistribution kind="education" code={code} year={year} compact={compact} />
+      </Suspense>
+      <Suspense fallback={<p className="history-loading" role="status">Haetaan siviilisäätyä…</p>}>
+        <ResidentDistribution kind="marital" code={code} year={year} />
+      </Suspense>
     </div>
   </section>;
 }

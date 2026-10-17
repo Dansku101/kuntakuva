@@ -21,7 +21,7 @@ export default async function MunicipalityEnergy({ code, year, compact = false }
   </table>;
   return <section className="overview-section energy-section" aria-labelledby="energy-heading">
     <div className="section-heading">
-      <div><p className="eyebrow">ENERGIA · {profile?.year ?? year}</p><h2 id="energy-heading"><Thermometer size={20} aria-hidden="true" />Rakennusten lämmitys</h2></div>
+      <div><p className="eyebrow">ENERGIA · {profile ? `Havaintovuosi ${profile.year}` : `Valittu vuosi ${year}`}</p><h2 id="energy-heading"><Thermometer size={20} aria-hidden="true" />Rakennusten lämmitys</h2></div>
       <a className="text-link" href={heatingSource} target="_blank" rel="noreferrer">Tilastokeskus<ExternalLink size={14} aria-hidden="true" /><span className="sr-only"> (uusi välilehti)</span></a>
     </div>
     {profile ? <>

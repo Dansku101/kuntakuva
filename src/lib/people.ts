@@ -1,3 +1,5 @@
+import { sourceJson } from "./source-json";
+
 const BASE = "https://pxdata.stat.fi/PxWeb/api/v1/fi/StatFin";
 const AREA = "alue_23_20260101";
 const AGE = "ikaryhma_10_20180101";
@@ -73,14 +75,15 @@ async function getPeopleProfiles(kind: "education" | "marital", code: string, se
   if (!/^KU\d{3}$/.test(code) || !/^\d{4}$/.test(selectedYear)) throw new Error("Invalid resident profile selection");
   const url = `${BASE}/${kind === "education" ? "vkour/12bq" : "vaerak/11rz"}.px`;
   const options = { cache: "force-cache" as const, next: { revalidate: 86400 } };
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`Resident metadata failed: ${response.status}`);
-  const metadata = await response.json() as Metadata;
+  const context = { source: `residents-${kind}`, code, year: selectedYear };
+  const metadata = await sourceJson<Metadata>(url, { ...options, signal: AbortSignal.timeout(15_000) }, context);
   const variable = (id: string) => metadata.variables?.find((item) => item.code === id)?.values;
   const years = variable(TIME)?.filter((item) => /^\d{4}$/.test(item) && Number(item) <= Number(selectedYear)).sort().slice(-count) ?? [];
   if (!years.length || !variable(AREA)?.includes(code)) return [];
   const definitions = kind === "education" ? educationGroups : maritalGroups;
   const category = kind === "education" ? EDUCATION : MARITAL;
+  // 11rz exposes single ages and an all-ages total, but no adult aggregate.
+  // Keep the exact 18+ scope; the all-ages total would include children.
   const ages = kind === "education" ? ["SSS"] : [...Array.from({ length: 82 }, (_, i) => String(i + 18).padStart(3, "0")), "100-"];
   const selections: Record<string, string[]> = {
     [AREA]: [code], [TIME]: years, [SEX]: ["SSS"], [AGE]: ages,
@@ -91,12 +94,10 @@ async function getPeopleProfiles(kind: "education" | "marital", code: string, se
   for (const [id, values] of Object.entries(selections)) {
     if (values.some((value) => !variable(id)?.includes(value))) throw new Error(`Missing resident category ${id}`);
   }
-  const dataResponse = await fetch(url, {
+  const data = await sourceJson<Dataset>(url, {
     ...options, method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
     body: JSON.stringify({ query: Object.entries(selections).map(([id, values]) => ({ code: id, selection: { filter: "item", values } })), response: { format: "json-stat2" } }),
-  });
-  if (!dataResponse.ok) throw new Error(`Resident data failed: ${dataResponse.status}`);
-  const data = await dataResponse.json();
+  }, context);
   return years.map((year) => {
     const totals = parsePeopleCounts(data, selections, category, year);
     const total = totals.SSS;

@@ -39,7 +39,6 @@ const { accountsFields, parseAccountsFacts, selectAccountsDataset, getMunicipali
 const { parseEmployment, getEmploymentTrend } = loadTs("src/lib/employment.ts");
 const { fiveYearPopulationChange, percentagePointChange } = loadTs("src/lib/trends.ts");
 const { searchMunicipalities, matchesMunicipalityName } = loadTs("src/lib/municipality-search.ts");
-const { GET: getMap } = loadTs("src/app/api/municipality-map/route.ts");
 const { default: TrendSeries } = loadTs("src/app/trend-series.tsx");
 const { parsePeopleCounts, getPeopleProfile, getEducationTrend, higherEducationShare } = loadTs("src/lib/people.ts");
 const { parseHeatingCounts, getHeatingProfile } = loadTs("src/lib/energy.ts");
@@ -411,29 +410,6 @@ test("trend chart server rendering preserves SVG tooltip text without React erro
   assert.ok(html.includes("<title>2024: 7,6 %</title>"), "The server must render the complete tooltip");
 });
 
-test("map labels prefer Finnish node positions and exclude area centres and localities", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => Response.json(String(url).includes("tilastointialueet") ? {
-    features: [{ type: "Feature", bbox: [24, 60, 25, 61], properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
-      geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] } }],
-  } : { elements: [
-    { id: 1, type: "node", lat: 60.2, lon: 24.7, tags: { place: "town", name: "Grankulla", "name:fi": "Kauniainen" } },
-    { id: 2, type: "way", center: { lat: 60.3, lon: 24.8 }, tags: { place: "neighbourhood", name: "Area centre" } },
-    { id: 3, type: "node", lat: 60.3, lon: 24.8, tags: { place: "locality", name: "Generic locality" } },
-    { id: 4, type: "node", lat: 62, lon: 24.8, tags: { place: "town", name: "Outside" } },
-  ] });
-  try {
-    const response = await getMap({ nextUrl: new URL("http://localhost/api/municipality-map?code=KU235&name=Kauniainen") });
-    const data = await response.json();
-    assert.equal(response.status, 200);
-    assert.deepEqual(data.settlements.map(({ name, lat, lon }) => ({ name, lat, lon })),
-      [{ name: "Kauniainen", lat: 60.2, lon: 24.7 }]);
-    const invalid = await getMap({ nextUrl: new URL("http://localhost/api/municipality-map") });
-    assert.equal(invalid.headers.get("Cache-Control"), "no-store");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 
 test("municipality search ranks spelling mistakes and partial names", () => {
   const items = [{ code: "KU235", name: "Kauniainen" }, { code: "KU091", name: "Helsinki" },
@@ -446,46 +422,6 @@ test("municipality search ranks spelling mistakes and partial names", () => {
   assert.equal(searchMunicipalities(items, "ka").length, 1);
 });
 
-test("map keeps its boundary during outages, fails over and reuses successful place data", async () => {
-  const { GET } = loadTs("src/app/api/municipality-map/route.ts");
-  const originalFetch = globalThis.fetch;
-  let requests = [];
-  let available = false;
-  globalThis.fetch = async (url) => {
-    if (String(url).includes("tilastointialueet")) return Response.json({ features: [{
-      type: "Feature", bbox: [24, 60, 25, 61], properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
-      geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] },
-    }] });
-    requests.push(String(url));
-    if (!available || String(url).includes("private.coffee")) return new Response("Timeout", { status: 504 });
-    return Response.json({ elements: [{ type: "node", id: 1, lat: 60.2, lon: 24.7, tags: { name: "Kirjasto", amenity: "library" } }] });
-  };
-  const request = (details) => ({ nextUrl: new URL(`http://localhost/api/municipality-map?code=KU235&name=Kauniainen&details=${details}`) });
-  try {
-    const boundary = await GET(request("0"));
-    assert.equal((await boundary.json()).detailsStatus, "loading");
-    assert.equal(requests.length, 0, "Boundary loading must not wait for Overpass");
-    const partial = await GET(request("1"));
-    const partialData = await partial.json();
-    assert.equal(partial.status, 200);
-    assert.equal(partialData.boundary.geometry.type, "Polygon");
-    assert.equal(partialData.detailsStatus, "unavailable");
-    assert.equal(partial.headers.get("Cache-Control"), "no-store");
-    assert.equal(requests.length, 2);
-    available = true;
-    requests = [];
-    const recovered = await GET(request("1"));
-    const recoveredData = await recovered.json();
-    assert.equal(recoveredData.detailsStatus, "ready");
-    assert.equal(recoveredData.places[0].name, "Kirjasto");
-    assert.ok(requests[0].includes("private.coffee"));
-    assert.ok(requests[1].includes("overpass-api.de"));
-    await GET(request("1"));
-    assert.equal(requests.length, 2, "Successful data must be reused");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 const areaCode = "alue_23_20260101";
 const yearCode = "timeperiod_y";
 
@@ -867,7 +803,7 @@ test("population rejects wrong metric, duplicate indexes, fractional people and 
   }
 });
 
-test("map uses verified code and year, rejects wrong or ambiguous geography before requesting places", async (t) => {
+test("map uses verified code and year and rejects wrong or ambiguous geography", async (t) => {
   const { GET } = loadTs("src/app/api/municipality-map/route.ts");
   const feature = { type: "Feature", properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
     geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] } };
@@ -879,6 +815,11 @@ test("map uses verified code and year, rejects wrong or ambiguous geography befo
   const result = await valid.json();
   assert.equal(result.name, "Kauniainen", "Untrusted name cannot override the verified municipality");
   assert.deepEqual(result.bbox, [24, 60, 25, 61]);
+  assert.equal(calls.length, 1, "Only the boundary source is requested");
+  assert.equal(result.places, undefined);
+  assert.equal(result.settlements, undefined);
+  assert.equal(result.detailsStatus, undefined);
+  assert.match(valid.headers.get("Cache-Control"), /public/);
   assert.equal(new URL(calls[0]).searchParams.get("CQL_FILTER"), "kunta='235'");
   for (const features of [[], [feature, feature], [{ ...feature, properties: { ...feature.properties, kunta: "091" } }],
     [{ ...feature, properties: { ...feature.properties, vuosi: 2025 } }]]) {
@@ -890,40 +831,6 @@ test("map uses verified code and year, rejects wrong or ambiguous geography befo
   assert.ok(calls.every((url) => url.includes("tilastointialueet")));
 });
 
-test("Overpass HTTP-200 timeouts are never fetch-cached; concurrent requests share a successful result", async (t) => {
-  const { GET } = loadTs("src/app/api/municipality-map/route.ts");
-  let overpassCalls = 0;
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (String(url).includes("tilastointialueet")) return Response.json({ features: [{
-      type: "Feature", properties: { kunta: "235", nimi: "Kauniainen", vuosi: 2026 },
-      geometry: { type: "Polygon", coordinates: [[[24, 60], [25, 60], [25, 61], [24, 61], [24, 60]]] },
-    }] });
-    overpassCalls++;
-    assert.equal(options.cache, "no-store");
-    assert.equal(options.body, undefined);
-    assert.equal(options.method ?? "GET", "GET");
-    const query = new URL(String(url)).searchParams.get("data");
-    assert.ok(query.includes("[bbox:60,24,61,25]"));
-    assert.ok(query.includes("[maxsize:67108864]"));
-    assert.equal(options.headers.Accept, "application/json");
-    await gate;
-    return Response.json(String(url).includes("private.coffee") ? { elements: [], remark: "runtime error: timeout" }
-      : { elements: [{ type: "node", id: 1, lat: 60.5, lon: 24.5,
-        tags: { name: "Library", amenity: "library", website: "javascript:alert(1)" } }] });
-  });
-  const request = { nextUrl: new URL("http://localhost/api/municipality-map?code=KU235") };
-  const pending = Promise.all([GET(request), GET(request)]);
-  release();
-  const responses = await pending;
-  assert.equal(overpassCalls, 2, "One shared primary and one shared fallback request");
-  for (const response of responses) {
-    const data = await response.json();
-    assert.equal(data.detailsStatus, "ready");
-    assert.equal(data.places[0].website, null);
-  }
-});
 
 test("grid selection never borrows a future observation", () => {
   const { gridYearFor } = loadTs("src/lib/map-data.ts");
@@ -936,13 +843,6 @@ test("grid selection never borrows a future observation", () => {
   assert.equal(gridYearFor("invalid"), null);
 });
 
-test("OSM links allow HTTP(S) only, without embedded credentials", () => {
-  const { safeWebsite } = loadTs("src/lib/map-data.ts");
-  for (const value of [null, "", "javascript:alert(1)", "data:text/html,test", "file:///c:/", "//example.com", "https://user:secret@example.com"]) {
-    assert.equal(safeWebsite(value), null);
-  }
-  assert.equal(safeWebsite("https://example.com/path?q=1"), "https://example.com/path?q=1");
-});
 
 test("population SVGs preserve gaps and render complete tooltip strings", () => {
   const { default: PopulationChart } = loadTs("src/app/population-chart.tsx");
@@ -952,4 +852,59 @@ test("population SVGs preserve gaps and render complete tooltip strings", () => 
   } }));
   assert.equal((html.match(/<polyline /g) ?? []).length, 2);
   assert.ok(html.includes("<title>Test, 2022: 120</title>"));
+});
+
+
+
+
+test("education streams while civil status is pending and failure stays local", async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { default: People } = loadTs("src/app/municipality-people.tsx", {
+    "@/lib/people": { getPeopleProfile: async kind => {
+      if (kind === "marital") { await gate; throw new Error("Source unavailable"); }
+      return { year: "2024", total: 10, groups: [] };
+    } },
+  });
+  const tree = People({ code: "KU092", year: "2025" });
+  const boundaries = tree.props.children[2].props.children;
+  assert.ok(boundaries.every(child => child.type === Suspense));
+  const [education, marital] = boundaries.map(child => child.props.children);
+  let maritalReady = false;
+  const pending = marital.type(marital.props).then(value => { maritalReady = true; return value; });
+  try {
+    const ready = await education.type(education.props);
+    const html = renderToString(createElement(ready.type, ready.props));
+    assert.match(html, /Havaintovuosi 2024/);
+    assert.equal(maritalReady, false);
+  } finally { release(); }
+  const failed = await pending;
+  assert.match(renderToString(createElement(failed.type, failed.props)), /Tietoja ei juuri nyt saada lähteestä/);
+});
+
+
+
+
+test("boundary map rejects invalid codes, handles outages, and cancels upstream on departure", async (t) => {
+  const { GET } = loadTs("src/app/api/municipality-map/route.ts");
+  const viewer = new AbortController();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    calls++;
+    if (calls === 1) return new Response("Unavailable", { status: 503 });
+    return new Promise((_, reject) => {
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+      viewer.abort();
+    });
+  });
+  const request = code => ({ nextUrl: new URL("http://localhost/api/municipality-map?code=" + code) });
+  const invalid = await GET(request("bad"));
+  assert.equal(invalid.status, 400);
+  assert.equal(calls, 0);
+  const unavailable = await GET(request("KU235"));
+  assert.equal(unavailable.status, 502);
+  assert.equal(unavailable.headers.get("Cache-Control"), "no-store");
+  const cancelled = await GET({ ...request("KU235"), signal: viewer.signal });
+  assert.equal(cancelled.status, 499);
+  assert.equal(calls, 2);
 });

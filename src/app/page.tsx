@@ -20,7 +20,7 @@ const views = [
   { id: "yleiskuva", label: "Yleiskuva", description: "Miltä kunnan tilanne näyttää?" },
   { id: "trendit", label: "Trendit", description: "Miten kunta on muuttunut?" },
   { id: "vertailu", label: "Vertailu", description: "Kaksi kuntaa rinnakkain" },
-  { id: "kartta", label: "Kartta", description: "Missä väestö ja paikat sijaitsevat?" },
+  { id: "kartta", label: "Kartta", description: "Missä kunta sijaitsee ja miten väestö sijoittuu?" },
   { id: "tilastot", label: "Tilastot", description: "Väestö, talous ja energia tarkemmin" },
 ] as const;
 
@@ -59,6 +59,9 @@ export default async function Home({ searchParams }: {
         <Link key={item.id} prefetch={false} href={`${baseUrl}&nakyma=${item.id}`}
           aria-current={item.id === view.id ? "page" : undefined}>{item.label}</Link>
       )}</nav>
+      <p className="people-note">{view.id === "kartta"
+        ? "Kuntaraja: aluejako 2026. Valittu vuosi rajaa väestöruutuaineistoa; taustakartta ei kuvaa valitun vuoden historiallista tilannetta."
+        : "Valittu vuosi rajaa havaintoja. Havaintovuosi ilmoitetaan tiedon yhteydessä; joissakin aineistoissa käytetään uusinta julkaistua havaintoa valittuun vuoteen mennessä."}</p>
       <div className="view-content" key={`${selectedCode}-${selectedYear}-${view.id}-${peer?.code}`}>
         {view.id === "yleiskuva" && series && <>
           <Suspense fallback={<p className="history-loading" role="status">Haetaan kunnan avainlukuja…</p>}>
@@ -80,7 +83,7 @@ export default async function Home({ searchParams }: {
             <MunicipalityHistory code={selectedCode} year={selectedYear} />
           </Suspense>
           <Suspense fallback={<p className="history-loading" role="status">Haetaan koulutuksen ja ympäristön aikasarjoja…</p>}>
-            <MunicipalityExtraHistory code={selectedCode} year={selectedYear} baseUrl={baseUrl} />
+            <MunicipalityExtraHistory code={selectedCode} year={selectedYear} />
           </Suspense>
         </>}
         {view.id === "vertailu" && <>
@@ -124,7 +127,7 @@ export default async function Home({ searchParams }: {
           </Suspense>
         </>}
         {series && <details className="data-disclosure source-disclosure"><summary>Väestöaineisto ja aluejako</summary>
-          <p>Tilastokeskus, taulukko 11ra · päivitetty {updatedLabel} · saatavilla {years[0]}–{years.at(-1)}.</p>
+          <p>Tilastokeskus, taulukko 11ra · lähde päivitetty {updatedLabel} · havaintovuodet {years[0]}–{years.at(-1)}.</p>
           <p>{series.regionalNote || "Väestön aikasarja noudattaa vuoden 2026 aluejakoa, ei historiallisia kuntarajoja."}</p>
           <p>Työssäkäyntitilaston aluejako on 2025. Eri aluejakojen lukuja ei yhdistetä yhdeksi tunnusluvuksi.</p>
           <a className="text-link" href="https://pxdata.stat.fi/PxWeb/pxweb/fi/StatFin/vaerak/11ra.px/" target="_blank" rel="noreferrer">Avaa väestön lähdetaulukko (uusi välilehti)</a>
